@@ -1,0 +1,42 @@
+{
+  "artifacts": {
+    "type": "NO_ARTIFACTS"
+  },
+  "timeoutInMinutes": 60,
+  "concurrentBuildLimit": 1,
+  "name": "keystone-sales-ops-deploy",
+  "serviceRole": "arn:aws:iam::YOUR_ACCOUNT_ID:role/keystone-sales-ops-codebuild",
+  "source": {
+    "type": "S3",
+    "location": "YOUR_PRIVATE_SOURCE_BUCKET/sales-ops/source.zip",
+    "buildspec": "backend/ci/buildspec.yml"
+  },
+  "environment": {
+    "type": "LINUX_CONTAINER",
+    "computeType": "BUILD_GENERAL1_MEDIUM",
+    "image": "aws/codebuild/standard:7.0",
+    "privilegedMode": true,
+    "environmentVariables": [
+      {
+        "name": "ECR_REPOSITORY_URI",
+        "value": "YOUR_ACCOUNT_ID.dkr.ecr.ap-south-1.amazonaws.com/keystone-sales-tracking-api",
+        "type": "PLAINTEXT"
+      },
+      {
+        "name": "MIGRATION_PROJECT_NAME",
+        "value": "keystone-sales-ops-migrations",
+        "type": "PLAINTEXT"
+      },
+      {
+        "name": "DEPLOY_MODE",
+        "value": "bootstrap",
+        "type": "PLAINTEXT"
+      },
+      {
+        "name": "APP_RUNNER_SERVICE_ARN",
+        "value": "arn:aws:apprunner:ap-south-1:YOUR_ACCOUNT_ID:service/keystone-sales-ops-api/YOUR_SERVICE_ID",
+        "type": "PLAINTEXT"
+      }
+    ]
+  }
+}

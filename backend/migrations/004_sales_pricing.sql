@@ -1,0 +1,11 @@
+ALTER TABLE orders DROP CONSTRAINT orders_stage_check;
+ALTER TABLE orders ADD CONSTRAINT orders_stage_check CHECK(stage IN ('Draft','Enquiry','Pricing','Quoted','Confirmed','On hold','Cancelled'));
+ALTER TABLE orders ALTER COLUMN rate_paise DROP NOT NULL;
+ALTER TABLE order_items ALTER COLUMN rate_paise DROP NOT NULL;
+ALTER TABLE orders ADD COLUMN sales_path text NOT NULL DEFAULT 'agreed' CHECK(sales_path IN ('agreed','needs-pricing'));
+ALTER TABLE orders ADD COLUMN quote_ref text NOT NULL DEFAULT '';
+ALTER TABLE orders ADD COLUMN pricing_source_ref text NOT NULL DEFAULT '';
+ALTER TABLE orders ADD COLUMN quote_version integer NOT NULL DEFAULT 0;
+ALTER TABLE orders ADD COLUMN ever_confirmed boolean NOT NULL DEFAULT false;
+UPDATE orders SET ever_confirmed=true WHERE stage='Confirmed' OR EXISTS(SELECT 1 FROM dispatches d WHERE d.order_id=orders.id) OR EXISTS(SELECT 1 FROM invoices i WHERE i.order_id=orders.id) OR EXISTS(SELECT 1 FROM sourcing_links s WHERE s.order_id=orders.id);
+CREATE TABLE order_quotes (id uuid PRIMARY KEY,order_id uuid NOT NULL REFERENCES orders(id),revision integer NOT NULL,reference text NOT NULL,items jsonb NOT NULL,created_by uuid NOT NULL REFERENCES users(id),created_at timestamptz NOT NULL DEFAULT now(),UNIQUE(order_id,revision));

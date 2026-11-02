@@ -1,0 +1,15 @@
+'use client';
+import {Dialog,DialogContent,DialogDescription,DialogHeader,DialogTitle} from '@/components/ui/dialog';
+import {money,num,type Row,type Workspace} from '@/lib/data';
+
+export function OrderItems({order,w,showInvoices=true,showFulfilment=true}:{order:Row;w:Workspace;showInvoices?:boolean;showFulfilment?:boolean}) {
+ const items=w.order_items.filter(i=>i.order_id===order.id);
+ return <section className="order-item-details"><h3>Order items · {items.length} SKUs</h3><div className="table-scroll"><table><thead><tr><th>SKU / variant</th><th>Ordered</th><th>Selling price · ex GST</th><th>GST</th>{showFulfilment&&<><th>Dispatched</th><th>Delivered</th></>}{showInvoices&&<th>Invoiced</th>}{showFulfilment&&<th>To deliver</th>}<th>Amount · ex GST</th></tr></thead><tbody>{items.map(i=><tr key={String(i.id)}><td><strong className="mono">{i.sku||'Legacy SKU'}</strong><small>{i.description}</small></td><td>{i.qty}</td><td>{money(i.rate_paise)}</td><td>{num(i.gst_bps)/100}%</td>{showFulfilment&&<><td>{i.dispatched}</td><td>{i.delivered}</td></>}{showInvoices&&<td>{i.invoiced}</td>}{showFulfilment&&<td>{Math.max(0,num(i.qty)-num(i.delivered))}</td>}<td>{money(i.rate_paise==null?null:num(i.qty)*num(i.rate_paise))}</td></tr>)}</tbody></table></div><div className="sku-totals"><span>Subtotal<strong>{money(order.subtotal_paise)}</strong></span><span>GST<strong>{order.total_paise==null?'—':money(num(order.total_paise)-num(order.subtotal_paise))}</strong></span><span>Total · incl GST<strong>{money(order.total_paise)}</strong></span></div></section>;
+}
+
+export type LineDetail={entity:'dispatches'|'invoices';record:Row};
+export function LineDetails({detail,w,onClose}:{detail:LineDetail;w:Workspace;onClose:()=>void}) {
+ const invoice=detail.entity==='invoices',r=detail.record;
+ const items=invoice?w.invoice_items.filter(i=>i.invoice_id===r.id):w.dispatch_items.filter(i=>i.dispatch_id===r.id);
+ return <Dialog open onOpenChange={open=>{if(!open)onClose();}}><DialogContent className="sm:max-w-[800px] max-h-[90dvh] overflow-y-auto"><DialogHeader><DialogTitle>{invoice?'Invoice '+r.number:'Shipment '+r.tracking}</DialogTitle><DialogDescription>{items.length} SKUs</DialogDescription></DialogHeader><div className="table-scroll"><table><thead><tr><th>SKU / variant</th><th>Quantity</th>{invoice?<><th>Selling price · ex GST</th><th>GST</th><th>Total · incl GST</th></>:<><th>Delivered</th><th>Returned</th><th>Pending outcome</th></>}</tr></thead><tbody>{items.map(i=><tr key={String(i.id)}><td><strong className="mono">{i.sku||'Legacy SKU'}</strong><small>{i.description}</small></td><td>{i.qty}</td>{invoice?<><td>{money(i.rate_paise)}</td><td>{num(i.gst_bps)/100}%</td><td>{money(i.total_paise)}</td></>:<><td>{i.delivered_qty}</td><td>{i.returned_qty}</td><td>{num(i.qty)-num(i.delivered_qty)-num(i.returned_qty)}</td></>}</tr>)}</tbody></table></div>{invoice&&<div className="sku-totals"><span>Invoice total<strong>{money(r.total_paise)}</strong></span><span>Received<strong>{money(r.paid_paise)}</strong></span><span>Outstanding<strong>{money(r.outstanding_paise)}</strong></span></div>}</DialogContent></Dialog>;
+}

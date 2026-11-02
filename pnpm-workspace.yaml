@@ -1,0 +1,8 @@
+packages:
+  - backend
+storeDir: .pnpm-store
+nodeLinker: hoisted
+allowBuilds:
+  sharp: true
+  unrs-resolver: true
+  msw: false

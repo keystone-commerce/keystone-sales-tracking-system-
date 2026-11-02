@@ -1,0 +1,244 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "schemaVersion": 1,
+  "name": "Keystone Admin",
+  "source": {
+    "branch": "main",
+    "commit": "f8cf22326b1d5c6cabb44072b8a3709d2efb541f",
+    "capturedAt": "2026-08-25"
+  },
+  "character": [
+    "dense",
+    "square-edged",
+    "utilitarian",
+    "neutral",
+    "data-first",
+    "restrained-motion"
+  ],
+  "platform": {
+    "framework": "React 19 with Vite",
+    "tailwind": "v4",
+    "shadcnStyle": "radix-lyra",
+    "shadcnBase": "radix",
+    "rsc": false,
+    "tsx": true,
+    "rtl": false,
+    "presetCode": "buHyRxT"
+  },
+  "shadcn": {
+    "schema": "https://ui.shadcn.com/schema.json",
+    "style": "radix-lyra",
+    "base": "radix",
+    "rsc": false,
+    "tsx": true,
+    "tailwind": {
+      "version": "v4",
+      "config": "",
+      "css": "src/index.css",
+      "baseColor": "neutral",
+      "cssVariables": true,
+      "prefix": ""
+    },
+    "iconLibrary": "tabler",
+    "rtl": false,
+    "aliases": {
+      "components": "@/components",
+      "utils": "@/lib/utils",
+      "ui": "@/components/ui",
+      "lib": "@/lib",
+      "hooks": "@/hooks"
+    },
+    "menuColor": "inverted-translucent",
+    "menuAccent": "subtle",
+    "registries": {},
+    "preset": {
+      "code": "buHyRxT",
+      "style": "lyra",
+      "baseColor": "neutral",
+      "theme": "emerald",
+      "chartColor": "neutral",
+      "font": "geist",
+      "fontHeading": "inherit",
+      "radius": "default",
+      "menuAccent": "subtle",
+      "menuColor": "inverted-translucent"
+    }
+  },
+  "typography": {
+    "sans": "Geist Variable, sans-serif",
+    "heading": "inherit",
+    "monoUsage": ["ids", "skus", "codes", "technical identifiers"],
+    "numericVariant": "tabular-nums",
+    "scalePx": {
+      "micro": 10,
+      "bodyAndControls": 12,
+      "titles": 14,
+      "largeTitle": 20,
+      "metric": 24
+    },
+    "weights": {
+      "regular": 400,
+      "medium": 500
+    }
+  },
+  "color": {
+    "baseColor": "neutral",
+    "theme": "emerald",
+    "light": {
+      "background": "#f4f4f5",
+      "foreground": "#0a0a0a",
+      "card": "#ffffff",
+      "cardForeground": "#0a0a0a",
+      "popover": "#ffffff",
+      "popoverForeground": "#0a0a0a",
+      "primary": "oklch(0.508 0.118 165.612)",
+      "primaryForeground": "oklch(0.979 0.021 166.113)",
+      "secondary": "#f5f5f5",
+      "secondaryForeground": "#171717",
+      "muted": "#f5f5f5",
+      "mutedForeground": "#737373",
+      "accent": "#f5f5f5",
+      "accentForeground": "#171717",
+      "destructive": "#e40014",
+      "destructiveForeground": "#fcf3f3",
+      "border": "#e5e5e5",
+      "input": "#e5e5e5",
+      "ring": "#a1a1a1",
+      "sidebar": "#ffffff",
+      "sidebarForeground": "#0a0a0a",
+      "sidebarAccent": "#f5f5f5",
+      "sidebarAccentForeground": "#171717",
+      "sidebarBorder": "#e5e5e5",
+      "sidebarRing": "#a1a1a1"
+    },
+    "dark": {
+      "background": "#0a0a0a",
+      "foreground": "#fafafa",
+      "card": "#171717",
+      "cardForeground": "#fafafa",
+      "popover": "#171717",
+      "popoverForeground": "#fafafa",
+      "primary": "oklch(0.432 0.095 166.913)",
+      "primaryForeground": "oklch(0.979 0.021 166.113)",
+      "secondary": "#262626",
+      "secondaryForeground": "#fafafa",
+      "muted": "#262626",
+      "mutedForeground": "#a1a1a1",
+      "accent": "#404040",
+      "accentForeground": "#fafafa",
+      "destructive": "#ff6568",
+      "destructiveForeground": "#df2225",
+      "border": "#ffffff1a",
+      "input": "#ffffff26",
+      "ring": "#737373",
+      "sidebar": "#171717",
+      "sidebarForeground": "#fafafa",
+      "sidebarAccent": "#262626",
+      "sidebarAccentForeground": "#fafafa",
+      "sidebarBorder": "#ffffff1a",
+      "sidebarRing": "#525252"
+    },
+    "charts": [
+      "#f0b100",
+      "#f0b100",
+      "oklch(0.681 0.162 75.834)",
+      "oklch(0.554 0.135 66.442)",
+      "oklch(0.476 0.114 61.907)"
+    ]
+  },
+  "geometry": {
+    "tokenRadiusRem": 0.625,
+    "componentRadiusPx": 0,
+    "circularExceptions": ["avatar", "avatar fallback", "avatar badge"],
+    "borderWidthPx": 1,
+    "surfaceRing": "ring-1 ring-foreground/10",
+    "focusRing": "1px ring at 50% opacity"
+  },
+  "spacingPx": {
+    "pagePadding": 24,
+    "standardSectionGap": 16,
+    "dashboardSectionGap": 24,
+    "cardPadding": 16,
+    "compactCardPadding": 12,
+    "fieldGap": 8,
+    "controlContentGap": 6
+  },
+  "sizingPx": {
+    "controlDefaultHeight": 32,
+    "controlSmallHeight": 28,
+    "controlExtraSmallHeight": 24,
+    "badgeHeight": 20,
+    "iconDefault": 16,
+    "headerHeight": 56,
+    "sidebarExpandedWidth": 256,
+    "sidebarCollapsedWidth": 48,
+    "sidebarMobileWidth": 288
+  },
+  "layout": {
+    "shell": "inset collapsible sidebar, sticky header, scrollable content",
+    "listPage": "24px padded vertical frame with header/actions, ringed flex table surface, footer pagination",
+    "dashboard": "responsive one/two/four-column cards with 16px gutters",
+    "dialog": "centered compact surface, 16px padding, square corners, thin ring",
+    "login": "centered card with 384px maximum width"
+  },
+  "motionMs": {
+    "overlay": 100,
+    "control": 150,
+    "sidebar": 200,
+    "themeToggle": 300,
+    "dashboardEntrance": 500
+  },
+  "componentConventions": {
+    "button": "12px/500, square, 32px default height, primary/outline/secondary/ghost/destructive/link variants",
+    "input": "32px tall, 12px type, square, transparent surface, thin border and focus ring",
+    "card": "square white/neutral surface, 1px low-contrast ring, 16px padding and gap",
+    "table": "12px type, compact 8px cells, sticky emerald header with primary foreground, subtle row hover",
+    "badge": "20px tall, square, 12px/500",
+    "menu": "square translucent popover with strong backdrop blur, thin ring, compact 8px items",
+    "dialog": "square popover surface with blurred low-opacity overlay",
+    "toast": "square, 12px type, 12px padding, thin low-contrast ring",
+    "emptyState": "centered vertical layout, 48px vertical padding, muted icon and description",
+    "status": "semantic badge plus restrained emerald, amber, red, or blue tint when domain status requires it"
+  },
+  "icons": {
+    "runtimeLibrary": "@tabler/icons-react",
+    "style": "outline",
+    "repositoryConfigDeclaration": "hugeicons",
+    "portableConfigDeclaration": "tabler",
+    "discrepancy": "Runtime imports are authoritative for visual parity."
+  },
+  "themeBehavior": {
+    "modes": ["light", "dark", "system"],
+    "strategy": "class",
+    "darkClass": "dark",
+    "storageKey": "theme",
+    "keyboardShortcut": "d when focus is not editable"
+  },
+  "installedShadcnComponents": [
+    "alert-dialog",
+    "alert",
+    "avatar",
+    "badge",
+    "breadcrumb",
+    "button",
+    "card",
+    "chart",
+    "collapsible",
+    "dialog",
+    "dropdown-menu",
+    "input",
+    "label",
+    "scroll-area",
+    "select",
+    "separator",
+    "sheet",
+    "sidebar",
+    "skeleton",
+    "sonner",
+    "switch",
+    "table",
+    "tabs",
+    "textarea",
+    "tooltip"
+  ]
+}

@@ -1,0 +1,10 @@
+ALTER TABLE order_documents ALTER COLUMN content DROP NOT NULL;
+ALTER TABLE order_documents ADD COLUMN storage_backend text NOT NULL DEFAULT 'database' CHECK(storage_backend IN ('database','s3'));
+ALTER TABLE order_documents ADD COLUMN storage_bucket text;
+ALTER TABLE order_documents ADD COLUMN storage_key text;
+ALTER TABLE order_documents ADD COLUMN storage_version text;
+ALTER TABLE order_documents ADD COLUMN size_bytes integer;
+UPDATE order_documents SET size_bytes=octet_length(content);
+ALTER TABLE order_documents ALTER COLUMN size_bytes SET NOT NULL;
+ALTER TABLE order_documents ADD CONSTRAINT document_size_check CHECK(size_bytes>0 AND size_bytes<=5242880);
+ALTER TABLE order_documents ADD CONSTRAINT document_storage_check CHECK((storage_backend='database' AND content IS NOT NULL AND storage_bucket IS NULL AND storage_key IS NULL AND storage_version IS NULL AND size_bytes=octet_length(content)) OR (storage_backend='s3' AND content IS NULL AND storage_bucket IS NOT NULL AND storage_key IS NOT NULL));

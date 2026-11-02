@@ -1,0 +1,11 @@
+services:
+  db:
+    image: postgres:17
+    ports: ["127.0.0.1:5442:5432"]
+    environment:
+      POSTGRES_DB: sales_ops
+      POSTGRES_USER: sales_ops
+      POSTGRES_PASSWORD: local-sales-ops-only
+    volumes: ["sales_ops_pg:/var/lib/postgresql/data"]
+volumes:
+  sales_ops_pg:

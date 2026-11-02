@@ -1,0 +1,15 @@
+{
+  "projectName": "keystone-sales-ops-bootstrap-admin",
+  "environmentVariablesOverride": [
+    {
+      "name": "RELEASE_IMAGE",
+      "value": "415407325762.dkr.ecr.ap-south-1.amazonaws.com/keystone-sales-tracking-api:YOUR_IMMUTABLE_RELEASE_TAG",
+      "type": "PLAINTEXT"
+    },
+    {
+      "name": "EXPECTED_IMAGE_DIGEST",
+      "value": "sha256:YOUR_RELEASE_IMAGE_DIGEST",
+      "type": "PLAINTEXT"
+    }
+  ]
+}

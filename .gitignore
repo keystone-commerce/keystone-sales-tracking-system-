@@ -1,0 +1,40 @@
+# Dependencies and package caches
+node_modules/
+.pnpm-store/
+.npm-cache/
+
+# Next.js builds and generated TypeScript files
+.next*/
+out/
+*.tsbuildinfo
+next-env.d.ts
+
+# Environment files; retain only blank/example templates
+.env*
+!.env.example
+
+# Local databases, development artifacts and uploads
+backend/.local-data/
+work/
+.release/
+
+# Tests and logs
+coverage/
+test-results/
+playwright-report/
+*.log
+
+# Local cloud credentials and private keys
+.aws/
+*.key
+*.p12
+*.pfx
+*.pem
+!backend/certs/rds-ca.pem
+
+# Editor and operating-system files
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+Desktop.ini

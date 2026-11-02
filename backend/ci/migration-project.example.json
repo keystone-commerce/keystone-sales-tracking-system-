@@ -1,0 +1,40 @@
+{
+  "artifacts": {
+    "type": "NO_ARTIFACTS"
+  },
+  "timeoutInMinutes": 20,
+  "concurrentBuildLimit": 1,
+  "name": "keystone-sales-ops-migrations",
+  "serviceRole": "arn:aws:iam::YOUR_ACCOUNT_ID:role/keystone-sales-ops-migration-codebuild",
+  "source": {
+    "type": "NO_SOURCE",
+    "buildspec": "# Configure this as the inline buildspec of a dedicated NO_SOURCE CodeBuild\n# project in the RDS VPC. DATABASE_URL comes from that project's secret mapping.\nversion: 0.2\nenv:\n  shell: bash\nphases:\n  build:\n    commands:\n      - |\n        set -euo pipefail\n        : \"${RELEASE_IMAGE:?Set the immutable ECR image URI}\"\n        : \"${EXPECTED_IMAGE_DIGEST:?Set the SHA256 digest}\"\n        : \"${EXPECTED_ECR_REPOSITORY_URI:?Configure the Sales Ops repository on this migration project}\"\n        : \"${DATABASE_URL:?Configure the migration database secret on the project}\"\n        : \"${AWS_DEFAULT_REGION:?Set the AWS region}\"\n        [[ \"$RELEASE_IMAGE\" =~ ^[0-9]{12}\\.dkr\\.ecr\\.[a-z0-9-]+\\.amazonaws\\.com/[a-z0-9._/-]+:[A-Za-z0-9_][A-Za-z0-9_.-]*$ ]] || { echo \"Invalid release image\" >&2; exit 2; }\n        [[ \"$EXPECTED_IMAGE_DIGEST\" =~ ^sha256:[0-9a-f]{64}$ ]] || { echo \"Invalid image digest\" >&2; exit 2; }\n        registry=\"${RELEASE_IMAGE%%/*}\"\n        repository_uri=\"${RELEASE_IMAGE%:*}\"\n        [[ \"$repository_uri\" == \"$EXPECTED_ECR_REPOSITORY_URI\" ]] || { echo \"Release image is outside the approved Sales Ops repository\" >&2; exit 2; }\n        aws ecr get-login-password --region \"$AWS_DEFAULT_REGION\" | docker login --username AWS --password-stdin \"$registry\"\n        docker pull \"$RELEASE_IMAGE\"\n        docker image inspect \"$RELEASE_IMAGE\" --format '{{json .RepoDigests}}' > /tmp/sales-ops-image-digests.json\n        EXPECTED_REPO_DIGEST=\"${repository_uri}@${EXPECTED_IMAGE_DIGEST}\" node -e 'const fs=require(\"node:fs\");const digests=JSON.parse(fs.readFileSync(\"/tmp/sales-ops-image-digests.json\",\"utf8\"));if(!digests.includes(process.env.EXPECTED_REPO_DIGEST))throw Error(\"Release image digest does not match; refusing migration\");'\n        docker run --rm \\\n          --env NODE_ENV=production \\\n          --env DATABASE_URL \\\n          --env DATABASE_CA_FILE=/app/certs/rds-ca.pem \\\n          --env DEV_EMBEDDED_DB=false \\\n          --env DEV_SEED=false \\\n          \"$RELEASE_IMAGE\" node src/manage.js migrate\n"
+  },
+  "vpcConfig": {
+    "vpcId": "YOUR_VPC_ID",
+    "subnets": [
+      "YOUR_PRIVATE_SUBNET_ID"
+    ],
+    "securityGroupIds": [
+      "YOUR_MIGRATION_SECURITY_GROUP_ID"
+    ]
+  },
+  "environment": {
+    "type": "LINUX_CONTAINER",
+    "computeType": "BUILD_GENERAL1_SMALL",
+    "image": "aws/codebuild/standard:7.0",
+    "privilegedMode": true,
+    "environmentVariables": [
+      {
+        "name": "EXPECTED_ECR_REPOSITORY_URI",
+        "value": "YOUR_ACCOUNT_ID.dkr.ecr.ap-south-1.amazonaws.com/keystone-sales-tracking-api",
+        "type": "PLAINTEXT"
+      },
+      {
+        "name": "DATABASE_URL",
+        "value": "/keystone/sales-ops/production/database-migration-url",
+        "type": "PARAMETER_STORE"
+      }
+    ]
+  }
+}
