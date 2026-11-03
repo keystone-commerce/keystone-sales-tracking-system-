@@ -14,10 +14,8 @@ after(async()=>db?.close());
 async function order(channel='Email',path='needs-pricing'){return createRecord(db,'orders',{customer_id:customer.id,request_channel:channel,request_notes:'Customer asked for 10 kettles',sales_path:path,stage:path==='agreed'?'Draft':'Enquiry',owner:'Sales',target_date:'2027-01-30',ship_to:'Bengaluru',items:[{sku:'KTL',description:'Kettle',qty:10,rate_paise:100000,gst_bps:1800}]},actor);}
 async function change(id,values){const o=(await db.query('SELECT * FROM orders WHERE id=$1',[id])).rows[0];return updateRecord(db,'orders',id,{version:o.version,stage:o.stage,...values},actor);}
 const upload=(agent,id,category,channel,bytes=png,name='message.png')=>agent.post(`/api/orders/${id}/documents`).set('X-Requested-With','sales-ops').set('Origin','http://localhost:3210').set('Content-Type','application/octet-stream').set('X-Document-Category',category).set('X-Communication-Channel',channel).set('X-File-Name',encodeURIComponent(name)).send(bytes);
-test('customer communication, quotation, PO and ready-for-sourcing require the right evidence',async()=>{
+test('email requests can advance without a request attachment and still require quotation and PO evidence',async()=>{
  const o=await order();
- await assert.rejects(()=>change(o.id,{stage:'Quoted',quote_ref:'Q-1'}),/original customer/);
- await upload(admin,o.id,'request','Email').expect(201);
  await assert.rejects(()=>change(o.id,{stage:'Quoted',quote_ref:'Q-1'}),/quotation or shared/);
  const quote=await upload(admin,o.id,'quotation','WhatsApp',pdf,'quote.pdf');assert.equal(quote.status,201);
  await change(o.id,{stage:'Quoted',quote_ref:'Q-1'});
@@ -29,8 +27,8 @@ test('customer communication, quotation, PO and ready-for-sourcing require the r
  await change(o.id,{stage:'Ready for sourcing'});
  const row=(await db.query('SELECT * FROM orders WHERE id=$1',[o.id])).rows[0];assert.equal(row.ever_confirmed,true);assert.equal(row.stage,'Ready for sourcing');
  await assert.rejects(()=>change(o.id,{stage:'Pricing'}),/cannot return/);
- const history=await orderHistory(db,o.id);assert.equal(history.events.filter(e=>e.detail.document).length,3);assert.ok(!JSON.stringify(history).includes('content'));
- const list=await admin.get(`/api/orders/${o.id}/documents`).expect(200);assert.equal(list.body.length,3);assert.ok(!JSON.stringify(list.body).includes('content'));
+ const history=await orderHistory(db,o.id);assert.equal(history.events.filter(e=>e.detail.document).length,2);assert.ok(!JSON.stringify(history).includes('content'));
+ const list=await admin.get(`/api/orders/${o.id}/documents`).expect(200);assert.equal(list.body.length,2);assert.ok(!JSON.stringify(list.body).includes('content'));
  const file=await admin.get(`/api/orders/${o.id}/documents/${quote.body.id}`).expect(200);assert.equal(file.headers['content-type'],'application/pdf');assert.match(file.headers['content-disposition'],/^attachment/);assert.equal(Buffer.compare(file.body,pdf),0);
 });
 test('call requests skip screenshots but still need a customer PO before handoff',async()=>{
@@ -89,4 +87,31 @@ test('amendment endpoint requires update permission and blocks orders already in
  await createRecord(db,'sourcing',{order_id:legacy.id,external_ref:'EXISTING-OPS',status:'Requested'},actor);
  await assert.rejects(()=>amendOrder(db,legacy.id,{version:1,reason:'Too late',items:[]},actor),/operations/);
  await request(app).post(`/api/orders/${legacy.id}/amendments`).set('X-Requested-With','sales-ops').send({version:1,reason:'Unauthorized',items:[]}).expect(401);
+});
+
+test('request attachments can be renamed and removed only on the matching open order',async()=>{
+ const o=await order(),other=await order();
+ const file=await upload(admin,o.id,'request','Email').expect(201);
+ const path='/api/orders/'+o.id+'/documents/'+file.body.id;
+ await admin.patch(path).set('X-Requested-With','sales-ops').send({filename:'Customer request.png'}).expect(204);
+ const list=await admin.get('/api/orders/'+o.id+'/documents').expect(200);
+ assert.equal(list.body[0].filename,'Customer request.png');
+ await admin.delete('/api/orders/'+other.id+'/documents/'+file.body.id).set('X-Requested-With','sales-ops').expect(404);
+ await admin.delete(path).set('X-Requested-With','sales-ops').expect(204);
+ await admin.get(path).expect(404);
+ const history=await orderHistory(db,o.id);
+ assert.ok(history.events.some(event=>event.action==='Document renamed'));
+ assert.ok(history.events.some(event=>event.action==='Document removed'));
+});
+
+test('manual sourcing requires a ready order and allows one record per SKU',async()=>{
+ const o=await order('Call','agreed');
+ const input={order_id:o.id,status:'Ready',supplier:'Example supplier'};
+ await assert.rejects(()=>createRecord(db,'sourcing',input,actor,{manualSourcing:true}),/ready for sourcing/);
+ await upload(admin,o.id,'po','Email',pdf,'po.pdf').expect(201);
+ await change(o.id,{stage:'PO received',po_ref:'PO-MANUAL',po_channel:'Email',po_received_date:'2026-10-31'});
+ await change(o.id,{stage:'Ready for sourcing'});
+ const record=await createRecord(db,'sourcing',input,actor,{manualSourcing:true});
+ assert.equal((await db.query('SELECT supplier FROM sourcing_links WHERE id=$1',[record.id])).rows[0].supplier,input.supplier);
+ await assert.rejects(()=>createRecord(db,'sourcing',input,actor,{manualSourcing:true}),/already recorded/);
 });

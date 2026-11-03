@@ -11,7 +11,22 @@ const safeSum=values=>{const result=values.reduce((sum,n)=>sum+BigInt(n),0n);req
 export async function audit(tx,actor,action,entity,id,detail={}) {
  await tx.query('INSERT INTO audit(actor_id,action,entity,record_id,detail) VALUES ($1,$2,$3,$4,$5)',[actor.id,action,entity,id,JSON.stringify(detail)]);
 }
-const historyFields=['description','stage','po_ref','owner','target_date','ship_to','sales_path','quote_ref','pricing_source_ref','quote_version','request_channel','request_notes','po_channel','po_received_date','order_revision','amendment_notes'];
+function vendorDetails(values, existing = {}) {
+ const gstin = text(values.vendor_gstin ?? existing.vendor_gstin ?? '', 'Vendor GSTIN', 15, true).toUpperCase();
+ requireValue(!gstin || /^\d{2}[A-Z]{5}\d{4}[A-Z][1-9A-Z]Z[0-9A-Z]$/.test(gstin), 'Vendor GSTIN format is invalid');
+ const phone = text(values.vendor_phone ?? existing.vendor_phone ?? '', 'Vendor phone', 40, true);
+ const email = text(values.vendor_email ?? existing.vendor_email ?? '', 'Vendor email', 254, true);
+ requireValue(!email || /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email), 'Vendor email format is invalid');
+ return [gstin, phone, email];
+}
+
+function orderAgreement(values, existing = {}) {
+ const status = values.agreement_status ?? existing.agreement_status ?? '';
+ const confirmedBy = text(values.confirmed_by ?? existing.confirmed_by ?? '', 'Customer representative', 160, true);
+ return [status === '' ? '' : choice(status, ['Not required','Required - pending','Under review','Signed'], 'agreement status'), confirmedBy];
+}
+
+const historyFields=['description','stage','po_ref','owner','agreement_status','confirmed_by','enquiry_received_date','target_date','ship_to','sales_path','quote_ref','pricing_source_ref','quote_version','request_channel','request_notes','po_channel','po_received_date','order_revision','amendment_notes'];
 const historyItemFields=['sku','description','qty','rate_paise','gst_bps'];
 const pick=(row,fields)=>Object.fromEntries(fields.filter(key=>Object.hasOwn(row,key)).map(key=>[key,row[key]]));
 async function orderSnapshot(tx,id){
@@ -48,7 +63,7 @@ function newOrderItems(v) {
   const sku=text(line.sku||'',`SKU on line ${index+1}`,100,legacy);
   if(sku){const key=sku.toLowerCase();requireValue(!skus.has(key),'Each SKU can appear only once in an order');skus.add(key);}
   const qty=integer(line.qty,'SKU quantity'),rate=line.rate_paise==null?null:money(line.rate_paise,'SKU selling rate'),gst=integer(line.gst_bps,'SKU GST',0,10000);
-  return {id:randomUUID(),sku,description:text(line.description,`Description on line ${index+1}`,1000),qty,rate_paise:rate,gst_bps:gst,total_paise:rate===null?null:total(qty,rate,gst)};
+  return {id:randomUUID(),sku,description:text(line.description,`Description on line ${index+1}`,1000),qty,unit_of_measure:choice(line.unit_of_measure??'Nos', ['Nos','Pcs','Pairs','Sets','Boxes','Kits','Kg','Meters','Litres','Other'], 'unit of measure'),rate_paise:rate,gst_bps:gst,total_paise:rate===null?null:total(qty,rate,gst)};
  });
 }
 function validateSales(path,stage,lines,quoteRef,previous) {
@@ -77,14 +92,20 @@ async function allocatedItems(tx,order,v) {
  });
 }
 
-export async function createRecord(db,entity,v,actor) {
+export async function createRecord(db,entity,v,actor,{manualSourcing=false}={}) {
  const id=randomUUID();
  return db.transaction(async tx=>{
   let result={id};
   if(entity==='customers') {
    const gstin=text(v.gstin||'','GSTIN',15,true).toUpperCase();
    requireValue(!gstin || /^\d{2}[A-Z]{5}\d{4}[A-Z][1-9A-Z]Z[0-9A-Z]$/.test(gstin),'GSTIN format is invalid');
-   await tx.query('INSERT INTO customers(id,name,email,gstin,address,terms) VALUES ($1,$2,$3,$4,$5,$6)',[id,text(v.name,'Customer name',160),text(v.email||'','Email',254,true),gstin,text(v.address||'','Address',1000,true),integer(v.terms??30,'Credit days',0,365)]);
+   const billing=text(v.billing_address??v.address??'','Billing address',1000,true);
+   const shipping=text(v.shipping_address??v.address??'','Shipping address',1000,true);
+   await tx.query('INSERT INTO customers(id,name,email,gstin,address,terms,contact_name,phone,billing_address,shipping_address,city,state,pin_code,customer_notes) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)',[
+    id,text(v.name,'Customer name',160),text(v.email||'','Email',254,true),gstin,v.address===undefined?billing:text(v.address,'Address',1000,true),integer(v.terms??30,'Credit days',0,365),
+    text(v.contact_name??'','Contact name',160,true),text(v.phone??'','Contact phone',40,true),billing,shipping,
+    text(v.city??'','City',120,true),text(v.state??'','State',120,true),text(v.pin_code??'','PIN code',20,true),text(v.customer_notes??'','Customer notes',1000,true)
+   ]);
   } else if(entity==='orders') {
    await one(tx,'SELECT id FROM customers WHERE id=$1',[uuid(v.customer_id,'Customer')]);
    const lines=newOrderItems(v);safeSum(lines.map(i=>i.total_paise||0));
@@ -97,16 +118,20 @@ export async function createRecord(db,entity,v,actor) {
    const po=text(v.po_ref||'','Confirmation reference',200,true),ship=text(v.ship_to||'','Ship-to address',1000,true);
    if(['PO received','Ready for sourcing','Confirmed'].includes(stage)){requireValue(po,'Add the Customer PO / confirmation reference before confirming');requireValue(ship,'Add the Ship-to address before confirming');}
    // Original commercial columns remain for compatibility. Line tables are authoritative.
-   await tx.query('INSERT INTO orders(id,customer_id,description,sku,qty,rate_paise,gst_bps,stage,po_ref,owner,target_date,ship_to) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)',[
-    id,v.customer_id,text(v.description||lines[0].description,'Product / order title',1000),lines[0].sku,safeSum(lines.map(i=>i.qty)),lines[0].rate_paise,lines[0].gst_bps,stage,po,text(v.owner,'Owner',160),date(v.target_date,'Target date'),ship]);
-   for(const [index,line]of lines.entries())await tx.query('INSERT INTO order_items(id,order_id,position,sku,description,qty,rate_paise,gst_bps) VALUES ($1,$2,$3,$4,$5,$6,$7,$8)',[line.id,id,index+1,line.sku,line.description,line.qty,line.rate_paise,line.gst_bps]);
+   await tx.query('INSERT INTO orders(id,customer_id,description,sku,qty,rate_paise,gst_bps,stage,po_ref,owner,target_date,ship_to,enquiry_received_date,agreement_status,confirmed_by) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)',[
+    id,v.customer_id,text(v.description||lines[0].description,'Product / order title',1000),lines[0].sku,safeSum(lines.map(i=>i.qty)),lines[0].rate_paise,lines[0].gst_bps,stage,po,text(v.owner,'Owner',160),date(v.target_date,'Target date'),ship,v.enquiry_received_date===undefined?null:date(v.enquiry_received_date,'Enquiry received'),...orderAgreement(v)]);
+   for(const [index,line]of lines.entries())await tx.query('INSERT INTO order_items(id,order_id,position,sku,description,qty,rate_paise,gst_bps,unit_of_measure) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)',[line.id,id,index+1,line.sku,line.description,line.qty,line.rate_paise,line.gst_bps,line.unit_of_measure]);
    await tx.query('UPDATE orders SET sales_path=$1,quote_ref=$2,pricing_source_ref=$3,ever_confirmed=$4,request_channel=$6,request_notes=$7,created_by=$8 WHERE id=$5',[path,quoteRef,pricingRef,stage==='Confirmed',id,requestChannel,requestNotes,actor.id]);
    if(stage==='Quoted')await saveQuote(tx,id,quoteRef,lines,actor);
    result={id,item_ids:lines.map(i=>i.id)};
   } else if(entity==='sourcing') {
-   const order=await lockOrder(tx,v.order_id);executable(order);
+   const order=await lockOrder(tx,v.order_id);
+   if(manualSourcing)requireValue(order.stage==='Ready for sourcing','Mark the order ready for sourcing first',409);
+   else if(order.stage!=='Ready for sourcing')executable(order);
    const lines=await allocatedItems(tx,order,{items:v.order_item_id?[{order_item_id:v.order_item_id,qty:1}]:undefined,qty:1});
-   await tx.query('INSERT INTO sourcing_links(id,order_id,order_item_id,external_ref,status,supplier,eta,notes) VALUES ($1,$2,$3,$4,$5,$6,$7,$8)',[id,order.id,lines[0].item.id,text(v.external_ref,'External sourcing reference',200),choice(v.status,['Requested','In progress','Ready','Blocked'],'sourcing status'),text(v.supplier||'','Supplier',200,true),v.eta?date(v.eta,'Supply date'):null,text(v.notes||'','Notes',1000,true)]);
+   const existing=await tx.query('SELECT id FROM sourcing_links WHERE order_item_id=$1',[lines[0].item.id]);
+   requireValue(!existing.rows.length,'Sourcing is already recorded for this SKU. Update the existing record.',409);
+   await tx.query('INSERT INTO sourcing_links(id,order_id,order_item_id,external_ref,status,supplier,eta,notes,vendor_gstin,vendor_phone,vendor_email) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)',[id,order.id,lines[0].item.id,text(v.external_ref??'','External sourcing reference',200,true),choice(v.status,['Requested','In progress','Ready','Blocked','Rejected'],'sourcing status'),text(v.supplier||'','Vendor name',200,true),v.eta?date(v.eta,'Supply date'):null,text(v.notes||'','Notes',1000,true),...vendorDetails(v)]);
   } else if(entity==='dispatches') {
    const order=await lockOrder(tx,v.order_id);executable(order);
    const lines=await allocatedItems(tx,order,v);
@@ -138,7 +163,9 @@ export async function createRecord(db,entity,v,actor) {
    await tx.query('INSERT INTO receipts(id,invoice_id,amount_paise,reference,mode,receipt_date,recorded_by) VALUES ($1,$2,$3,$4,$5,$6,$7)',[id,inv.id,amount,text(v.reference,'Payment reference',200),choice(v.mode,['NEFT','RTGS','IMPS','UPI','Cheque','Cash','Other'],'payment mode'),received,actor.id]);
   } else if(entity==='tasks') {
    if(v.order_id)await lockOrder(tx,v.order_id);
-   await tx.query('INSERT INTO tasks(id,order_id,title,owner,due_date,priority,status) VALUES ($1,$2,$3,$4,$5,$6,$7)',[id,v.order_id||null,text(v.title,'Task',500),text(v.owner,'Owner',160),date(v.due_date,'Due date'),choice(v.priority,['Normal','High','Critical'],'priority'),'Open']);
+   const assignee=v.assignee_id?await one(tx,'SELECT id,name,email FROM users WHERE id=$1 AND active=true FOR SHARE',[uuid(v.assignee_id,'Assignee')]):null;
+   await tx.query('INSERT INTO tasks(id,order_id,title,owner,due_date,priority,status,assignee_id) VALUES ($1,$2,$3,$4,$5,$6,$7,$8)',[id,v.order_id||null,text(v.title,'Task',500),assignee?.name??text(v.owner,'Owner',160),date(v.due_date,'Due date'),choice(v.priority,['Normal','High','Critical'],'priority'),'Open',assignee?.id??null]);
+   if(assignee)result={id,notification:{email:assignee.email,title:v.title,dueDate:v.due_date,orderId:v.order_id}};
   }
   await audit(tx,actor,'Created',entity,id,entity==='orders'?{after:await orderSnapshot(tx,id)}:result.item_ids?{item_count:result.item_ids.length}:{});
   return result;
@@ -163,7 +190,7 @@ export async function amendOrder(db,id,v,actor){
   const seen=new Set(existing.map(i=>i.sku.toLowerCase()));
   for(const line of lines){requireValue(!seen.has(line.sku.toLowerCase()),'This SKU already exists. Add only new SKU codes');seen.add(line.sku.toLowerCase());requireValue(line.rate_paise!==null,'Enter the agreed selling price for each added SKU');}
   safeSum([...existing,...lines].map(i=>i.rate_paise===null?0:total(i.qty,Number(i.rate_paise),i.gst_bps)));
-  for(const [index,line]of lines.entries())await tx.query('INSERT INTO order_items(id,order_id,position,sku,description,qty,rate_paise,gst_bps) VALUES ($1,$2,$3,$4,$5,$6,$7,$8)',[line.id,id,existing.length+index+1,line.sku,line.description,line.qty,line.rate_paise,line.gst_bps]);
+  for(const [index,line]of lines.entries())await tx.query('INSERT INTO order_items(id,order_id,position,sku,description,qty,rate_paise,gst_bps,unit_of_measure) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)',[line.id,id,existing.length+index+1,line.sku,line.description,line.qty,line.rate_paise,line.gst_bps,line.unit_of_measure]);
   const revision=order.order_revision+1;
   await tx.query("UPDATE orders SET order_revision=$1,amendment_notes=$2,stage='Awaiting revised PO',po_ref='',po_channel='',po_received_date=NULL,qty=$3,version=version+1 WHERE id=$4",[revision,notes,safeSum([...existing,...lines].map(i=>i.qty)),id]);
   await audit(tx,actor,'Order amended','orders',id,{before,after:await orderSnapshot(tx,id)});
@@ -221,7 +248,7 @@ export async function updateRecord(db,entity,id,v,actor) {
    await tx.query('UPDATE orders SET request_channel=$1,request_notes=$2,po_channel=$3,po_received_date=$4 WHERE id=$5',[requestChannel,requestNotes,poChannel,poDate,id]);
    await tx.query('UPDATE orders SET quote_ref=$1,pricing_source_ref=$2,ever_confirmed=ever_confirmed OR $3,rate_paise=$4,gst_bps=$5 WHERE id=$6',[quoteRef,pricingRef,['PO received','Ready for sourcing','Confirmed'].includes(stage),lines[0].rate_paise,lines[0].gst_bps,id]);
    if(stage==='Quoted'&&order.stage!=='Quoted')await saveQuote(tx,id,quoteRef,lines,actor);
-   await tx.query('UPDATE orders SET stage=$1,po_ref=$2,ship_to=$3,owner=$4,target_date=$5,version=version+1 WHERE id=$6',[stage,po,ship,owner,target,id]);
+   await tx.query('UPDATE orders SET stage=$1,po_ref=$2,ship_to=$3,owner=$4,target_date=$5,enquiry_received_date=$7,agreement_status=$8,confirmed_by=$9,version=version+1 WHERE id=$6',[stage,po,ship,owner,target,id,v.enquiry_received_date===undefined?order.enquiry_received_date:date(v.enquiry_received_date,'Enquiry received'),...orderAgreement(v,order)]);
   } else if(entity==='dispatches') {
    const d=await one(tx,'SELECT * FROM dispatches WHERE id=$1 FOR UPDATE',[id]);requireValue(d.version===v.version,'Shipment changed. Refresh before saving.',409);
    const saved=(await tx.query('SELECT * FROM dispatch_items WHERE dispatch_id=$1 ORDER BY id',[id])).rows;
@@ -247,11 +274,11 @@ export async function updateRecord(db,entity,id,v,actor) {
    for(const line of lines)await tx.query('UPDATE dispatch_items SET delivered_qty=$1,returned_qty=$2 WHERE id=$3',[line.delivered,line.returned,line.item.id]);
    await tx.query('UPDATE dispatches SET delivered_qty=$1,returned_qty=$2,status=$3,pod=$4,actual_date=$5,version=version+1 WHERE id=$6',[delivered,returned,status,pod,actual,id]);
   } else if(entity==='tasks') {
-   const task=await one(tx,'SELECT * FROM tasks WHERE id=$1 FOR UPDATE',[id]);requireValue(task.version===v.version,'Task changed. Refresh before saving.',409);
+   const task=await one(tx,'SELECT * FROM tasks WHERE id=$1 FOR UPDATE',[id]);requireValue(can(actor,'access.users.read')||task.assignee_id===actor.id,'Follow-up not found',404);requireValue(task.version===v.version,'Task changed. Refresh before saving.',409);
    await tx.query('UPDATE tasks SET status=$1,version=version+1 WHERE id=$2',[choice(v.status,['Open','In progress','Blocked','Completed'],'task status'),id]);
   } else if(entity==='sourcing') {
    const link=await one(tx,'SELECT * FROM sourcing_links WHERE id=$1 FOR UPDATE',[id]);requireValue(link.version===v.version,'Sourcing reference changed. Refresh before saving.',409);
-   await tx.query('UPDATE sourcing_links SET status=$1,supplier=$2,eta=$3,notes=$4,version=version+1,updated_at=now() WHERE id=$5',[choice(v.status,['Requested','In progress','Ready','Blocked'],'sourcing status'),text(v.supplier||'','Supplier',200,true),v.eta?date(v.eta,'ETA'):null,text(v.notes||'','Notes',1000,true),id]);
+   await tx.query('UPDATE sourcing_links SET status=$1,supplier=$2,eta=$3,notes=$4,vendor_gstin=$6,vendor_phone=$7,vendor_email=$8,version=version+1,updated_at=now() WHERE id=$5',[choice(v.status,['Requested','In progress','Ready','Blocked','Rejected'],'sourcing status'),text(v.supplier||'','Vendor name',200,true),v.eta?date(v.eta,'ETA'):null,text(v.notes||'','Notes',1000,true),id,...vendorDetails(v,link)]);
   }
   await audit(tx,actor,'Updated',entity,id,entity==='orders'?{before,after:await orderSnapshot(tx,id)}:v);return {id};
  });
@@ -260,7 +287,7 @@ export async function updateRecord(db,entity,id,v,actor) {
 export async function workspace(db,actor) {
  return db.transaction(async tx=>{
   await tx.query('SET TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY');
-  const rows=async (permission,sql)=>!actor||can(actor,permission)?(await tx.query(sql)).rows:[];
+  const rows=async (permission,sql,params)=>!actor||can(actor,permission)?(await tx.query(sql,params)).rows:[];
   const result={
    customers:await rows('customers.read','SELECT * FROM customers ORDER BY name'),
    orders:await rows('orders.read',`SELECT o.*,c.name AS customer_name,x.qty::int AS qty,x.item_count::int AS item_count,x.subtotal_paise::bigint AS subtotal_paise,x.total_paise::bigint AS total_paise,(SELECT count(*)::int FROM sourcing_links sl WHERE sl.order_id=o.id) AS sourcing_line_count,(SELECT count(*)::int FROM sourcing_links sl WHERE sl.order_id=o.id AND sl.status='Ready') AS sourcing_ready_count,COALESCE(d.dispatched,0)::int AS dispatched,COALESCE(d.delivered,0)::int AS delivered,COALESCE(i.invoiced,0)::int AS invoiced FROM orders o JOIN customers c ON c.id=o.customer_id JOIN (SELECT order_id,SUM(qty) qty,count(*) item_count,CASE WHEN count(rate_paise)=count(*) THEN SUM(qty::numeric*rate_paise) END subtotal_paise,CASE WHEN count(rate_paise)=count(*) THEN SUM(qty::numeric*rate_paise+floor((qty::numeric*rate_paise*gst_bps+5000)/10000)) END total_paise FROM order_items GROUP BY order_id) x ON x.order_id=o.id LEFT JOIN (SELECT order_id,SUM(qty) dispatched,SUM(delivered_qty) delivered FROM dispatch_items GROUP BY order_id) d ON d.order_id=o.id LEFT JOIN (SELECT order_id,SUM(qty) invoiced FROM invoice_items GROUP BY order_id) i ON i.order_id=o.id ORDER BY o.created_at DESC`),
@@ -271,7 +298,9 @@ export async function workspace(db,actor) {
    invoices:await rows('invoices.read','SELECT i.*,(SELECT count(*)::int FROM invoice_items ii WHERE ii.invoice_id=i.id) AS item_count,COALESCE(r.paid,0)::bigint AS paid_paise,(i.total_paise-COALESCE(r.paid,0))::bigint AS outstanding_paise FROM invoices i LEFT JOIN (SELECT invoice_id,SUM(amount_paise) AS paid FROM receipts GROUP BY invoice_id) r ON r.invoice_id=i.id ORDER BY i.created_at DESC'),
    invoice_items:await rows('invoices.read','SELECT ii.*,oi.sku,oi.description FROM invoice_items ii JOIN order_items oi ON oi.id=ii.order_item_id ORDER BY ii.invoice_id,oi.position'),
    receipts:await rows('receipts.read','SELECT r.*,i.number AS invoice_number FROM receipts r JOIN invoices i ON i.id=r.invoice_id ORDER BY r.created_at DESC'),
-   tasks:await rows('tasks.read','SELECT * FROM tasks ORDER BY due_date'),
+   tasks:!actor||can(actor,'access.users.read')
+    ?await rows('tasks.read','SELECT * FROM tasks ORDER BY due_date')
+    :await rows('tasks.read','SELECT * FROM tasks WHERE assignee_id=$1 ORDER BY due_date',[actor.id]),
    audit:await rows('audit.read','SELECT a.*,u.name AS actor_name FROM audit a JOIN users u ON u.id=a.actor_id ORDER BY a.id DESC LIMIT 100')
   };
   result.orders=result.orders.map(({sourcing_line_count,sourcing_ready_count,...row})=>({...row,execution_status:row.stage!=='Confirmed'?row.stage:row.delivered>=row.qty?'Delivered':row.delivered>0?'Partially delivered':row.dispatched>0?'In transit':sourcing_ready_count===row.item_count?'Ready to dispatch':sourcing_line_count>0?'Sourcing':'Confirmed'}));

@@ -46,3 +46,16 @@ export async function exportRegister(entity:Register,rows:Row[],w:Workspace) {
  const expanded=rows.flatMap(r=>source.filter(i=>i[key]===r.id).map(i=>({record_id:r.id,order_id:entity==='orders'?r.id:r.order_id,reference:entity==='orders'?orderCode(r):r.number||r.tracking,sku:i.sku,description:i.description,qty:i.qty,rate_paise:i.rate_paise??null,gst_bps:i.gst_bps??null,...(entity==='orders'?{}:{delivered_qty:i.delivered_qty??i.delivered??null,returned_qty:i.returned_qty??null,invoice_total_paise:entity==='invoices'?r.total_paise:null})})));
  exportCsv(expanded,entity+'-sku-lines');
 }
+
+export const vendorStatuses = [
+ {value:'Requested',label:'Awaiting vendor response'},
+ {value:'In progress',label:'In talks'},
+ {value:'Ready',label:'Vendor agreed'},
+ {value:'Rejected',label:'Vendor rejected'},
+ {value:'Blocked',label:'Blocked'},
+];
+
+export function vendorStatusLabel(status: string) {
+ return vendorStatuses.find(option=>option.value===status)?.label ?? status;
+}
+export const skuUnits = ['Nos','Pcs','Pairs','Sets','Boxes','Kits','Kg','Meters','Litres','Other'];

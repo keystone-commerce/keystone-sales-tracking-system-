@@ -14,7 +14,7 @@ export function configFrom(env=process.env) {
  const frontendOrigin=env.FRONTEND_ORIGIN||'http://localhost:3210';
  if(new URL(frontendOrigin).origin!==frontendOrigin || (production&&!frontendOrigin.startsWith('https://')))throw Error('Set FRONTEND_ORIGIN to the exact frontend origin');
  if(env.SOURCING_PORTAL_URL && new URL(env.SOURCING_PORTAL_URL).protocol!=='https:')throw Error('SOURCING_PORTAL_URL must use HTTPS');
- const releaseScope=env.RELEASE_SCOPE||'pre-sourcing';
- if(!['pre-sourcing','full'].includes(releaseScope))throw Error('Invalid RELEASE_SCOPE');
+ const releaseScope=env.RELEASE_SCOPE||'manual-sourcing';
+ if(!['pre-sourcing','manual-sourcing','full'].includes(releaseScope))throw Error('Invalid RELEASE_SCOPE');
  return {...otpConfigFrom(env),...documentConfigFrom(env),releaseScope,production,secret:env.JWT_SECRET,frontendOrigin,sourcingUrl:env.SOURCING_PORTAL_URL,port:Number(env.PORT||8082)};
 }

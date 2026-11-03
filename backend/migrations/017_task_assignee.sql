@@ -1,0 +1,1 @@
+ALTER TABLE tasks ADD COLUMN assignee_id uuid REFERENCES users(id) ON DELETE SET NULL;

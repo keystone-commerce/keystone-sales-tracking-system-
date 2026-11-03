@@ -2,7 +2,7 @@
 
 Customer → requirements and contact method/evidence → agreed price or pricing/quotation → customer PO file and receipt details → Ready for sourcing.
 
-New requests use Call, WhatsApp, Email, In person or Other. Original WhatsApp/email evidence is required before quotation or acceptance; the creation form requests a screenshot/document immediately. Saving opens the request detail with the guided tracker. Calls use notes and SKU requirements.
+New requests use Call, WhatsApp, Email, In person or Other. A request attachment is optional for every channel. On the agreed-price path, it is labelled Agreed price proof. Saving opens the request detail with the guided tracker. Calls use notes and SKU requirements.
 
 The pricing-needed path supports unpriced requirements and price editing, followed by an externally shared quotation with its reference, sharing channel and document. Quotation snapshots are revisioned. Accepted prices stay locked after PO received. The agreed-price path skips a new quotation but still records the customer PO.
 

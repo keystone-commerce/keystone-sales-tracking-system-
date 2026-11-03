@@ -1,3 +1,4 @@
+import {gmailMailer} from './otp/gmail.js';
 import {otpRoutes} from './otp/routes.js';
 import express from 'express';
 import {createDocumentStore} from './document-storage.js';
@@ -12,9 +13,12 @@ export function createApp(db,config) {
  const app=express();app.disable('x-powered-by');app.set('trust proxy',1);
  app.set('json replacer',(_k,v)=>typeof v==='bigint'?Number(v):v);
  app.use(helmet());app.use(express.json({limit:'64kb'}));
+ const sendFollowUp=config.otp?.gmailReady?gmailMailer(config.otp.gmail):null;
  const auth=authTools(db,config);
  const deferred=new Set(['sourcing','dispatches','invoices','receipts']);
  const v1=config.releaseScope!=='full';
+ const manualSourcing=config.releaseScope==='manual-sourcing';
+ if(manualSourcing)deferred.delete('sourcing');
  const releaseWorkspace=async actor=>{
   const data=await workspace(db,actor);
   if(v1){
@@ -56,6 +60,11 @@ export function createApp(db,config) {
  app.post('/api/auth/logout',async(req,res)=>{await auth.logout(req,res);res.status(204).end();});
  app.use('/api/access',accessRoutes(db));
  app.use('/api/orders',documentRoutes(db,config.documentStore||createDocumentStore(config)));
+ app.get('/api/task-assignees',async(req,res)=>{
+  requirePermissions(req.actor,'tasks.read','tasks.create');
+  const {rows}=await db.query('SELECT id,name,email FROM users WHERE active=true ORDER BY name,email');
+  res.json(rows);
+ });
  app.get('/api/workspace',async(req,res)=>res.json(await releaseWorkspace(req.actor)));
  app.post('/api/orders/:id/amendments',async(req,res)=>{requirePermissions(req.actor,'orders.read','orders.update');res.status(201).json(await amendOrder(db,req.params.id,req.body,req.actor));});
  app.get('/api/orders/:id/history',async(req,res)=>{requirePermissions(req.actor,'orders.read');res.json(await orderHistory(db,req.params.id));});
@@ -65,7 +74,7 @@ export function createApp(db,config) {
   const data=await releaseWorkspace(req.actor),lineKey={orders:'order_items',invoices:'invoice_items',dispatches:'dispatch_items'}[entity];
   res.json({rows:data[entity],items:lineKey?data[lineKey]:[]});
  });
- app.get('/api/integrations',(_req,res)=>res.json({releaseScope:config.releaseScope||'pre-sourcing',sourcing:{mode:v1?'disabled':'manual-reference',portalUrl:config.sourcingUrl||null,apiConnected:false},delivery:{mode:v1?'disabled':'manual'},payments:{mode:v1?'disabled':'manual-verified-receipt'},environment:config.production?'production':'local development'}));
+ app.get('/api/integrations',(_req,res)=>res.json({releaseScope:config.releaseScope||'pre-sourcing',sourcing:{mode:v1&&!manualSourcing?'disabled':'manual-reference',portalUrl:config.sourcingUrl||null,apiConnected:false},delivery:{mode:v1?'disabled':'manual'},payments:{mode:v1?'disabled':'manual-verified-receipt'},environment:config.production?'production':'local development'}));
  app.post('/api/:entity',async(req,res)=>{
   const {entity}=req.params;requireValue(REGISTERS.includes(entity),'Unknown register',404);requireReleased(entity);
   requirePermissions(req.actor,entity+'.read',entity+'.create');
@@ -73,7 +82,22 @@ export function createApp(db,config) {
   if(entity==='orders')requirePermissions(req.actor,'customers.read');
   if(entity==='receipts')requirePermissions(req.actor,'invoices.read');
   requireValue(req.body && typeof req.body==='object'&&!Array.isArray(req.body),'Record data is required');
-  res.status(201).json(await createRecord(db,entity,req.body,req.actor));
+  const {notification,...saved}=await createRecord(db,entity,req.body,req.actor,{manualSourcing});
+  if(!notification)return res.status(201).json(saved);
+  let emailStatus='unavailable';
+  if(sendFollowUp){
+   try{
+    await sendFollowUp({
+     email:notification.email,subject:'New Sales Ops follow-up',
+     text:`You have a new follow-up in Sales Ops.\n\n${notification.title}\nDue: ${notification.dueDate}\n\n${config.frontendOrigin}`
+    });
+    emailStatus='sent';
+   }catch{
+    emailStatus='failed';
+    console.error({event:'follow_up_email_failed',taskId:saved.id});
+   }
+  }
+  res.status(201).json({...saved,emailStatus});
  });
  app.patch('/api/:entity/:id',async(req,res)=>{
   const {entity,id}=req.params;requireValue(['orders','dispatches','tasks','sourcing'].includes(entity),'This register does not support updates',404);

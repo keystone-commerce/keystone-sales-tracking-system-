@@ -10,10 +10,6 @@ export async function validateEvidenceStage(tx,order,stage){
  if(!modern&&order.order_revision===1&&!['PO received','Ready for sourcing'].includes(stage))return;
  if(['Quoted','PO received','Ready for sourcing','Confirmed'].includes(stage)){
   requireValue(modern||order.order_revision>1,'Record how the customer request was received first');
-  if(['WhatsApp','Email'].includes(order.request_channel)){
-   const proof=await tx.query("SELECT id FROM order_documents WHERE order_id=$1 AND category='request' AND channel=$2 LIMIT 1",[order.id,order.request_channel]);
-   requireValue(proof.rows.length,'Attach the original customer message or email screenshot before proceeding');
-  }
  }
  if(stage==='Quoted'){
   const revision=order.stage==='Quoted'?order.quote_version:order.quote_version+1;
@@ -44,8 +40,32 @@ export function documentRoutes(db,store=null){
   requirePermissions(req.actor,'orders.read');uuid(req.params.id,'Order');uuid(req.params.documentId,'Document');
   const doc=await one(db,'SELECT filename,mime_type,content,storage_backend,storage_bucket,storage_key,storage_version,size_bytes FROM order_documents WHERE id=$1 AND order_id=$2',[req.params.documentId,req.params.id]);
   let bytes;try{bytes=doc.storage_backend==='s3'?await store?.get(doc):Buffer.from(doc.content);if(!bytes)throw Error('S3 storage is not configured');}catch(error){console.error({event:'document_download_failed',code:error.code||error.name});return res.status(503).json({error:'Document storage is unavailable. Try again.'});}
-  res.set('Content-Type',doc.mime_type).set('Content-Disposition',`attachment; filename="document"; filename*=UTF-8''${encodeURIComponent(doc.filename)}`).set('X-Content-Type-Options','nosniff');res.send(bytes);
+  const preview=req.query.preview==='1'&&['image/png','image/jpeg','image/webp','application/pdf'].includes(doc.mime_type);
+  res.set('Content-Type',doc.mime_type).set('Content-Disposition',`${preview?"inline":"attachment"}; filename="document"; filename*=UTF-8''${encodeURIComponent(doc.filename)}`).set('Cache-Control','private, no-store').set('X-Content-Type-Options','nosniff');res.send(bytes);
  });
+ router.route('/:id/documents/:documentId')
+  .patch((req,res)=>changeAttachment(req,res,false))
+  .delete((req,res)=>changeAttachment(req,res,true));
+ async function changeAttachment(req,res,remove){
+  requirePermissions(req.actor,'orders.read','orders.update');
+  const orderId=uuid(req.params.id,'Order');
+  const documentId=uuid(req.params.documentId,'Document');
+  const filename=remove?null:text(req.body?.filename,'Filename',180).replace(/[\\/\x00-\x1f\x7f]/g,'_');
+  const document=await db.transaction(async tx=>{
+   const order=await one(tx,'SELECT stage,ever_confirmed,order_revision FROM orders WHERE id=$1 FOR UPDATE',[orderId]);
+   const doc=await one(tx,"SELECT id,category,channel,filename,order_revision,storage_backend,storage_bucket,storage_key,storage_version FROM order_documents WHERE id=$1 AND order_id=$2 AND category IN ('request','po')",[documentId,orderId]);
+   const editable=doc.category==='request'?!order.ever_confirmed:doc.order_revision===order.order_revision;
+   const historicalPoRemoval=remove&&doc.category==='po'&&doc.order_revision<order.order_revision;
+   const requestRemoval=remove&&doc.category==='request';
+   requireValue(historicalPoRemoval||requestRemoval||(editable&&!['Cancelled','PO received','Ready for sourcing','Confirmed'].includes(order.stage)),'Attachment is locked at this stage',409);
+   if(remove)await tx.query('DELETE FROM order_documents WHERE id=$1',[documentId]);
+   else await tx.query('UPDATE order_documents SET filename=$1 WHERE id=$2',[filename,documentId]);
+   await tx.query("INSERT INTO audit(actor_id,action,entity,record_id,detail) VALUES ($1,$2,'orders',$3,$4)",[req.actor.id,remove?'Document removed':'Document renamed',orderId,JSON.stringify({document:{id:doc.id,category:doc.category,channel:doc.channel,filename:filename??doc.filename}})]);
+   return doc;
+  });
+  if(remove&&document.storage_backend==='s3')await cleanUncommittedObject(db,store,documentId,document);
+  res.status(204).end();
+ }
  router.post('/:id/documents',raw({type:'application/octet-stream',limit:'5mb'}),async(req,res)=>{
   requirePermissions(req.actor,'orders.read');uuid(req.params.id,'Order');
   const category=choice(req.get('x-document-category'),['request','quotation','po'],'document type');
