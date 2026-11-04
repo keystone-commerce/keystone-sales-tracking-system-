@@ -1,5 +1,7 @@
 # Keystone Sales Operations
 
+Production URLs, environment settings and release operations are recorded in [Production deployment](docs/PRODUCTION.md). The hosting preparation sections below describe the original setup plan.
+
 V1 supports two paths: agreed customer prices → confirmed order; or enquiry → pricing → quoted → confirmed order. It stops before sourcing. Includes login, role-based access, follow-ups, CSV exports and audit history.
 
 ## Local development
