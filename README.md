@@ -1,4 +1,4 @@
-# Keystone Sales Operations
+# Keystone Sales Operating System
 
 Production URLs, environment settings and release operations are recorded in [Production deployment](docs/PRODUCTION.md). The hosting preparation sections below describe the original setup plan.
 

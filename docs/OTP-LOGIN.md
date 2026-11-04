@@ -22,7 +22,7 @@ GMAIL_OAUTH_CLIENT_ID=<OAuth client ID>
 GMAIL_OAUTH_CLIENT_SECRET=<OAuth client secret>
 GMAIL_OAUTH_REFRESH_TOKEN=<refresh token with gmail.send permission>
 GMAIL_SENDER_EMAIL=<authorized sender address>
-GMAIL_SENDER_NAME=Keystone Sales Ops
+GMAIL_SENDER_NAME=Keystone Sales Operating System
 ```
 
 Use an authorized sender and a refresh token issued for this OAuth client with Gmail API send access. If generating a new OTP secret, use Node crypto.randomBytes(32).toString('hex') and save its value locally without sharing it. Existing issued codes are invalidated if the secret changes.

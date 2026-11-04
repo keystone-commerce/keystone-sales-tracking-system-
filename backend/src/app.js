@@ -88,8 +88,8 @@ export function createApp(db,config) {
   if(sendFollowUp){
    try{
     await sendFollowUp({
-     email:notification.email,subject:'New Sales Ops follow-up',
-     text:`You have a new follow-up in Sales Ops.\n\n${notification.title}\nDue: ${notification.dueDate}\n\n${config.frontendOrigin}`
+     email:notification.email,subject:'New Keystone Sales Operating System follow-up',
+     text:`You have a new follow-up in Keystone Sales Operating System.\n\n${notification.title}\nDue: ${notification.dueDate}\n\n${config.frontendOrigin}`
     });
     emailStatus='sent';
    }catch{

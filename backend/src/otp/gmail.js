@@ -10,7 +10,7 @@ export function gmailMailer(gmail,{fetchUrl=fetch,now=()=>Date.now()}={}){
  }
  return async({email,subject,text})=>{
   if(!EMAIL_PATTERN.test(email)||!EMAIL_PATTERN.test(gmail.senderEmail)||/[\r\n]/.test(subject))throw Error('Invalid email');
-  const sender=Buffer.from(gmail.senderName||'Keystone Sales Ops').toString('base64');
+  const sender=Buffer.from(gmail.senderName||'Keystone Sales Operating System').toString('base64');
   const raw=Buffer.from([`From: =?UTF-8?B?${sender}?= <${gmail.senderEmail}>`,`To: ${email}`,("Subject: "+subject),'MIME-Version: 1.0','Content-Type: text/plain; charset=UTF-8','Content-Transfer-Encoding: base64','',Buffer.from(text).toString('base64').match(/.{1,76}/g).join('\r\n')].join('\r\n')).toString('base64url');
   for(let attempt=0;attempt<2;attempt++){
    const token=await accessToken();
@@ -27,8 +27,8 @@ export function gmailOtpMailer(gmail, options){
  return ({email,code})=>{
   if(!/^\d{6}$/.test(code))throw Error('Invalid OTP email');
   return send({
-   email,subject:'Your Keystone Sales Ops sign-in code',
-   text:`Your Keystone Sales Ops sign-in code is ${code}.\n\nThis code expires in 5 minutes. If you did not request it, ignore this email.`
+   email,subject:'Your Keystone Sales Operating System sign-in code',
+   text:`Your Keystone Sales Operating System sign-in code is ${code}.\n\nThis code expires in 5 minutes. If you did not request it, ignore this email.`
   });
  };
 }
