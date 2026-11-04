@@ -14,7 +14,7 @@ const patch=(path,body)=>admin.patch('/api'+path).set('X-Requested-With','sales-
 before(async()=>{
  db=await openDatabase({DEV_EMBEDDED_DB:'true',EMBEDDED_PATH:'memory://'});await migrate(db);await migrate(db);
  adminActor=await bootstrap(db,'admin@example.com','testing-password-123','Admin');
- await bootstrap(db,'sales@example.com','testing-password-123','Sales','sales');
+ await bootstrap(db,'sales@example.com','testing-password-123','Sales','member');
  await bootstrap(db,'viewer@example.com','testing-password-123','Viewer','viewer');
  app=createApp(db,{releaseScope:'full',secret:'test-session-secret-with-at-least-32-chars',production:false,frontendOrigin:origin});
  admin=request.agent(app);sales=request.agent(app);viewer=request.agent(app);

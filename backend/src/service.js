@@ -301,7 +301,12 @@ export async function workspace(db,actor) {
    tasks:!actor||can(actor,'access.users.read')
     ?await rows('tasks.read','SELECT * FROM tasks ORDER BY due_date')
     :await rows('tasks.read','SELECT * FROM tasks WHERE assignee_id=$1 ORDER BY due_date',[actor.id]),
-   audit:await rows('audit.read','SELECT a.*,u.name AS actor_name FROM audit a JOIN users u ON u.id=a.actor_id ORDER BY a.id DESC LIMIT 100')
+   audit:!actor||can(actor,'audit.read')
+    ?await rows('audit.read','SELECT a.*,u.name AS actor_name FROM audit a JOIN users u ON u.id=a.actor_id ORDER BY a.id DESC LIMIT 100')
+    :await rows('audit.operations.read',`SELECT a.id,a.created_at,a.action,a.entity,a.record_id,u.name AS actor_name
+     FROM audit a JOIN users u ON u.id=a.actor_id
+     WHERE a.entity=ANY($1::text[]) ORDER BY a.id DESC LIMIT 100`,
+     [['customers','orders','sourcing'].filter(entity=>can(actor,entity+'.read'))])
   };
   result.orders=result.orders.map(({sourcing_line_count,sourcing_ready_count,...row})=>({...row,execution_status:row.stage!=='Confirmed'?row.stage:row.delivered>=row.qty?'Delivered':row.delivered>0?'Partially delivered':row.dispatched>0?'In transit':sourcing_ready_count===row.item_count?'Ready to dispatch':sourcing_line_count>0?'Sourcing':'Confirmed'}));
   if(actor&&!can(actor,'invoices.read'))for(const key of ['orders','order_items'])result[key]=result[key].map(({invoiced,...row})=>row);

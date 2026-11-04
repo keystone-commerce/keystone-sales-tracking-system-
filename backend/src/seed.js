@@ -8,7 +8,7 @@ export async function bootstrap(db,email,password,name='Administrator',role='adm
  await db.transaction(async tx=>{
   const modern=(await tx.query("SELECT to_regclass('public.access_roles') AS present")).rows[0].present;
   if(modern){
-   await tx.query('INSERT INTO users(id,email,name,password_hash,role,is_super_admin) VALUES ($1,$2,$3,$4,$5,$6)',[id,email.trim().toLowerCase(),name,hash,role,role==='admin']);
+   await tx.query('INSERT INTO users(id,email,name,password_hash,role,is_super_admin) VALUES ($1,$2,$3,$4,$5,$6)',[id,email.trim().toLowerCase(),name,hash,role==='member'?'viewer':role,role==='admin']);
    await tx.query('INSERT INTO access_user_roles(user_id,role_id) SELECT $1,id FROM access_roles WHERE key=$2',[id,role]);
   }else await tx.query('INSERT INTO users(id,email,name,password_hash,role) VALUES ($1,$2,$3,$4,$5)',[id,email.trim().toLowerCase(),name,hash,role]);
  });

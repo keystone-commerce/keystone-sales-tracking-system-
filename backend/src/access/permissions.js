@@ -150,6 +150,12 @@ export const PERMISSIONS = [
     "readOnly": true
   },
   {
+    "key": "audit.operations.read",
+    "label": "View sales activity",
+    "group": "Activity",
+    "readOnly": true
+  },
+  {
     "key": "audit.read",
     "label": "View activity",
     "group": "Activity",
@@ -207,64 +213,25 @@ export const SYSTEM_ROLES = [
     "id": "00000000-0000-4000-8000-000000000001"
   },
   {
-    "key": "sales",
-    "name": "Sales",
+    "key": "member",
+    "name": "Member",
     "permissions": [
       "customers.read",
-      "orders.read",
-      "sourcing.read",
-      "dispatches.read",
-      "tasks.read",
       "customers.create",
-      "customers.export",
+      "orders.read",
       "orders.create",
       "orders.update",
-      "orders.export",
+      "sourcing.read",
       "sourcing.create",
       "sourcing.update",
+      "tasks.read",
+      "tasks.update",
+      "customers.export",
+      "orders.export",
       "sourcing.export",
-      "tasks.create",
-      "tasks.update",
-      "tasks.export"
+      "audit.operations.read"
     ],
-    "id": "00000000-0000-4000-8000-000000000002"
-  },
-  {
-    "key": "logistics",
-    "name": "Logistics",
-    "permissions": [
-      "orders.read",
-      "customers.read",
-      "sourcing.read",
-      "dispatches.read",
-      "dispatches.create",
-      "dispatches.update",
-      "dispatches.export",
-      "tasks.read",
-      "tasks.create",
-      "tasks.update",
-      "tasks.export"
-    ],
-    "id": "00000000-0000-4000-8000-000000000003"
-  },
-  {
-    "key": "finance",
-    "name": "Finance",
-    "permissions": [
-      "orders.read",
-      "customers.read",
-      "invoices.read",
-      "invoices.create",
-      "invoices.export",
-      "receipts.read",
-      "receipts.create",
-      "receipts.export",
-      "tasks.read",
-      "tasks.create",
-      "tasks.update",
-      "tasks.export"
-    ],
-    "id": "00000000-0000-4000-8000-000000000004"
+    "id": "00000000-0000-4000-8000-000000000006"
   },
   {
     "key": "viewer",
