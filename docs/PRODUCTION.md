@@ -84,11 +84,13 @@ vercel link --yes --project keystone-sales-tracking-system
 vercel deploy --prod --yes
 ```
 
-Frontend deployment uses the CLI. It is not connected to automatic Git deployments.
+Vercel is connected to GitHub and automatically deploys `main` when frontend files or shared frontend build/dependency settings change. `scripts/vercel-ignore-build.sh` compares against the last successful deployment, including all commits in a push. Backend-only and documentation-only changes skip the frontend build. The watched paths are listed in that script; update them when adding a new frontend source/config directory. A missing comparison commit triggers a build rather than risking a missed release. Other branches do not deploy against production data.
+
+Frontend and backend releases run independently. Keep API changes backward compatible during deployments that change both sides.
 
 ## Backend releases
 
-The existing `keystone-sales-tracking-image` CodeBuild project now uses `backend/ci/buildspec.yml` and runs the complete release sequence. Its name was preserved to avoid a duplicate build project. A signed GitHub push webhook triggers it for `main` only. Build concurrency is limited to one.
+The existing `keystone-sales-tracking-image` CodeBuild project now uses `backend/ci/buildspec.yml` and runs the complete release sequence. Its name was preserved to avoid a duplicate build project. A signed GitHub push webhook triggers it for `main` only when files under `backend/` change. Build concurrency is limited to one.
 
 1. Install and test the backend.
 2. Build and push an immutable ECR release tag.
