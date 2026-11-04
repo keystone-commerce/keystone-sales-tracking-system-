@@ -18,16 +18,16 @@ import {vendorStatusLabel,api,currentActor,day,empty,exportRegister,formatDate,m
 type Page=Register|'overview'|'quality'|'settings'|'access';
 const nav:{id:Page;label:string;icon:typeof IconUsers;group:string}[]=[
  {id:'access',label:'Admin access',icon:IconShieldCheck,group:'Administration'},
- {id:'overview',label:'Overview',icon:IconLayoutDashboard,group:'Workspace'},
- {id:'orders',label:'Sales orders',icon:IconShoppingBag,group:'Operations'},
- {id:'sourcing',label:'Sourcing handoff',icon:IconArrowsExchange,group:'Operations'},
+ {id:'quality',label:'Control checks',icon:IconShieldCheck,group:'Administration'},
+ {id:'settings',label:'Workspace settings',icon:IconSettings,group:'Administration'},
+ {id:'customers',label:'Customers',icon:IconUsers,group:'Directory'},
  {id:'dispatches',label:'Dispatch & delivery',icon:IconTruckDelivery,group:'Operations'},
  {id:'invoices',label:'Invoices',icon:IconFileInvoice,group:'Operations'},
  {id:'receipts',label:'Payment receipts',icon:IconReceiptRupee,group:'Operations'},
+ {id:'orders',label:'Sales orders',icon:IconShoppingBag,group:'Operations'},
+ {id:'sourcing',label:'Sourcing handoff',icon:IconArrowsExchange,group:'Operations'},
  {id:'tasks',label:'Team follow-ups',icon:IconCheckbox,group:'Operations'},
- {id:'customers',label:'Customers',icon:IconUsers,group:'Directory'},
- {id:'quality',label:'Control checks',icon:IconShieldCheck,group:'Administration'},
- {id:'settings',label:'Workspace settings',icon:IconSettings,group:'Administration'}
+ {id:'overview',label:'Overview',icon:IconLayoutDashboard,group:'Workspace'}
 ];
 function Badge({children}:{children:ReactNode}){const s=String(children);const tone=/overdue|blocked|cancel|return/i.test(s)?'red':/draft|transit|partial|sourcing|requested|progress|open|high|pending|hold/i.test(s)?'amber':/confirm|deliver|paid|ready|complete/i.test(s)?'green':'neutral';return <span className={'status '+tone}>{children}</span>;}
 function State({title,children}:{title:string;children:ReactNode}){return <div className="empty-state"><IconPackage size={26} stroke={1.3}/><strong>{title}</strong></div>;}
