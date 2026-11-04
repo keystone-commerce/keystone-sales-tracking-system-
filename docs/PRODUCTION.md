@@ -69,6 +69,22 @@ All 17 migrations were applied before service creation. Bootstrap created the fi
 
 With explicit approval, CodeBuild and App Runner use the existing `keystone-aws-dev` private subnets and NAT in `vpc-0e90d6f615820fad0`. They connect to the existing public RDS endpoint with verified TLS. The RDS VPC has no private NAT route, and there is no peering between these VPCs. No shared route or RDS security-group rules were changed.
 
+Reuse these dedicated resources for subsequent changes:
+
+| Resource | Name or identifier |
+| --- | --- |
+| Migration security group | `sg-084b7ece3c4fb44bb` |
+| Runtime security group | `sg-05c008fb6caf14381` |
+| App Runner VPC connector | `keystone-sales-tracking-api` |
+| App Runner scaling configuration | `keystone-sales-tracking-api` |
+| ECR access role | `keystone-sales-tracking-apprunner-access` |
+| Runtime instance role | `keystone-sales-tracking-apprunner-instance` |
+| Migration service role | `keystone-sales-ops-migration-codebuild` |
+| Release service role, reused | `keystone-sales-tracking-image-codebuild` |
+| Vercel project | `prj_msn2yEqdhOOzf9bgO3OxXhL5JUR3` |
+
+The reused private subnets are `subnet-00d6f5abaa939690a`, `subnet-046cce7edcf5a4721`, and `subnet-0cdaf5386472408de`. The release role's `iam:PassRole` permission is limited to the two App Runner roles above. Migration status reads are scoped to the migration project ARN, as required by CodeBuild.
+
 With explicit approval for this initial deployment, runtime and migrations use the existing `sales_tracking_system_app` database owner. This gives the API schema-changing privileges. A database administrator should create a separate DML-only runtime login later and update only SSM `database-url`; retain the owner login for `database-migration-url`.
 
 App Runner uses one instance, with minimum and maximum size 1. Its ECR automatic deployments are disabled so image pushes cannot bypass migrations.
@@ -115,5 +131,7 @@ The AWS GitHub connection could fetch source but could not register the webhook.
 ## Verification and remaining acceptance
 
 TypeScript validation and all 58 backend tests passed. The Vercel production build succeeded. The backend returns HTTP 200 with `status: ready`; the frontend returns HTTP 200, and its `/api/auth/me` rewrite returns the expected HTTP 401 without a session. The Gmail OAuth token refresh succeeded with `gmail.send` scope. All 17 migration ledger entries and the active initial admin were verified in RDS.
+
+The Git-triggered Vercel deployment of commit `fdbe6b72acc6e4fa0f46774d7838bc35e153186c` succeeded. The frontend filter was exercised against backend-only, documentation-only, multi-commit frontend, shared-dependency, first-deployment and missing-history cases.
 
 Real OTP delivery, an interactive login, authenticated document uploads/downloads and a database restore drill still require acceptance testing. No OTP email was sent during infrastructure setup. This deployment does not claim those checks have passed.
