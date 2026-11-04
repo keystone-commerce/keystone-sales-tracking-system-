@@ -88,6 +88,8 @@ Vercel is connected to GitHub and automatically deploys `main` when frontend fil
 
 Frontend and backend releases run independently. Keep API changes backward compatible during deployments that change both sides.
 
+Git-triggered Vercel deployments require a commit author with access to the Vercel team. This checkout uses the approved `Keystone Commerce <tech@keystonecommerce.in>` identity for deployment commits. Other developers need their own authorized Vercel access before their frontend commits can deploy automatically.
+
 ## Backend releases
 
 The existing `keystone-sales-tracking-image` CodeBuild project now uses `backend/ci/buildspec.yml` and runs the complete release sequence. Its name was preserved to avoid a duplicate build project. A signed GitHub push webhook triggers it for `main` only when files under `backend/` change. Build concurrency is limited to one.
