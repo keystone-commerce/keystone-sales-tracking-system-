@@ -18,11 +18,12 @@ export class S3DocumentStore {
  }
 }
 export function createDocumentStore(config){return config.documentStorage==='s3'?new S3DocumentStore(config):null;}
-export async function cleanUncommittedObject(db,store,id,stored){
+export async function cleanUncommittedObject(db,store,id,stored,table='order_documents'){
  if(!stored)return;
  try{
   // A failed COMMIT acknowledgement does not prove the metadata was rolled back.
-  const existing=await db.query('SELECT id FROM order_documents WHERE id=$1',[id]);
+  const query=table==='procurement_documents'?'SELECT id FROM procurement_documents WHERE id=$1':'SELECT id FROM order_documents WHERE id=$1';
+  const existing=await db.query(query,[id]);
   if(!existing.rows.length)await store.remove(stored);
  }catch(error){console.error({event:'document_cleanup_required',documentId:id,code:error.code||error.name});}
 }

@@ -1,3 +1,4 @@
+import {procurementRoutes} from './procurement.js';
 import {gmailMailer} from './otp/gmail.js';
 import {otpRoutes} from './otp/routes.js';
 import express from 'express';
@@ -59,6 +60,10 @@ export function createApp(db,config) {
  app.get('/api/auth/me',(req,res)=>res.json({...req.actor,session_id:undefined}));
  app.post('/api/auth/logout',async(req,res)=>{await auth.logout(req,res);res.status(204).end();});
  app.use('/api/access',accessRoutes(db));
+ app.use('/api/procurement',(req,_res,next)=>{
+  requireValue(config.releaseScope==='full','Supplier purchasing is not enabled in this release',404);
+  next();
+ },procurementRoutes(db,config.documentStore||createDocumentStore(config)));
  app.use('/api/orders',documentRoutes(db,config.documentStore||createDocumentStore(config)));
  app.get('/api/task-assignees',async(req,res)=>{
   requirePermissions(req.actor,'tasks.read','tasks.create');
@@ -74,7 +79,7 @@ export function createApp(db,config) {
   const data=await releaseWorkspace(req.actor),lineKey={orders:'order_items',invoices:'invoice_items',dispatches:'dispatch_items'}[entity];
   res.json({rows:data[entity],items:lineKey?data[lineKey]:[]});
  });
- app.get('/api/integrations',(_req,res)=>res.json({releaseScope:config.releaseScope||'pre-sourcing',sourcing:{mode:v1&&!manualSourcing?'disabled':'manual-reference',portalUrl:config.sourcingUrl||null,apiConnected:false},delivery:{mode:v1?'disabled':'manual'},payments:{mode:v1?'disabled':'manual-verified-receipt'},environment:config.production?'production':'local development'}));
+ app.get('/api/integrations',(_req,res)=>res.json({releaseScope:config.releaseScope||'pre-sourcing',procurement:{enabled:config.releaseScope==='full'},sourcing:{mode:v1&&!manualSourcing?'disabled':'manual-reference',portalUrl:config.sourcingUrl||null,apiConnected:false},delivery:{mode:v1?'disabled':'manual'},payments:{mode:v1?'disabled':'manual-verified-receipt'},environment:config.production?'production':'local development'}));
  app.post('/api/:entity',async(req,res)=>{
   const {entity}=req.params;requireValue(REGISTERS.includes(entity),'Unknown register',404);requireReleased(entity);
   requirePermissions(req.actor,entity+'.read',entity+'.create');
