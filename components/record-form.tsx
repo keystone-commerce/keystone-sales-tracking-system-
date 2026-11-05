@@ -20,7 +20,7 @@ export type FormRequest={entity:Register;record?:Row;orderId?:string;invoiceId?:
 
 export function RecordForm({request,w,onClose,onSaved,onCreated}:{request:FormRequest;w:Workspace;onClose:()=>void;onSaved:(s:string)=>void;onCreated?:(id:string)=>void}) {
  const {entity,record,orderId,invoiceId}=request,editing=!!record;
- const active=w.orders.filter(o=>o.stage===(entity==='sourcing'?'Ready for sourcing':'Confirmed'));
+ const active=w.orders.filter(o=>entity==='sourcing'?o.stage==='Ready for sourcing':['Ready for sourcing','Confirmed'].includes(String(o.stage)));
  const orderOptions=active.map(o=>({value:String(o.id),label:`${orderCode(o)} · ${o.customer_name} · ${o.description}`}));
  const customers=w.customers.map(c=>({value:String(c.id),label:String(c.name)}));
  const invoices=w.invoices.filter(i=>num(i.outstanding_paise)>0).map(i=>({value:String(i.id),label:`${i.number} · ${money(i.outstanding_paise)} outstanding`}));

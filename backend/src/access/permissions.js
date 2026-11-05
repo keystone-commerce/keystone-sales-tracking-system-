@@ -1,4 +1,9 @@
 export const PERMISSIONS = [
+  {key:'procurement.read',label:'View supplier purchasing',group:'Supplier purchasing',readOnly:true},
+  {key:'procurement.create',label:'Create suppliers, quotations, POs and requests',group:'Supplier purchasing',readOnly:false},
+  {key:'procurement.approve',label:'Approve assigned payment requests',group:'Supplier purchasing',readOnly:false},
+  {key:'procurement.pay',label:'Record supplier payments',group:'Supplier purchasing',readOnly:false},
+  {key:'procurement.manage',label:'Configure approval policy',group:'Supplier purchasing',readOnly:false},
   {
     "key": "customers.read",
     "label": "View",
@@ -181,6 +186,7 @@ export const SYSTEM_ROLES = [
     "key": "admin",
     "name": "Administrator",
     "permissions": [
+      "procurement.read","procurement.create","procurement.approve","procurement.pay","procurement.manage",
       "customers.read",
       "customers.create",
       "customers.export",
@@ -216,6 +222,7 @@ export const SYSTEM_ROLES = [
     "key": "member",
     "name": "Member",
     "permissions": [
+      "procurement.read","procurement.create",
       "customers.read",
       "customers.create",
       "orders.read",

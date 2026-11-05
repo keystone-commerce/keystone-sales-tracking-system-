@@ -57,3 +57,9 @@ The login screen now uses email → six-digit code → session. See [OTP setup](
 ## First production admin
 
 The separate manual [one-time bootstrap job](docs/BOOTSTRAP-ADMIN.md) is prepared for yashraj@keystonecommerce.in as Admin. It runs only after migrations, using a verified backend image and a protected RDS connection. It is not part of normal releases and has not been created or run in AWS.
+
+## Full order-to-payment workflow
+
+Set the backend to RELEASE_SCOPE=full after applying migration 021 to enable supplier quotations, purchase orders, independently approved payment requests, supplier payments, and the existing dispatch, invoicing and collection registers. Existing release scopes remain available.
+
+See [Order-to-payment setup and daily workflow](docs/ORDER-TO-PAYMENT.md) for permissions, approver setup, document handling, and validation.

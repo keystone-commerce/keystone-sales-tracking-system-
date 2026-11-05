@@ -49,7 +49,7 @@ export async function orderHistory(db,id){
  });
 }
 async function lockOrder(tx,id) { return one(tx,'SELECT * FROM orders WHERE id=$1 FOR UPDATE',[uuid(id,'Order')]); }
-function executable(order) { requireValue(order.stage==='Confirmed','Confirm the order before dispatching or invoicing',409); }
+function executable(order) { requireValue(['Confirmed','Ready for sourcing'].includes(order.stage)&&order.accepted_revision===order.order_revision,'Accept the current PO and mark the order ready for sourcing before dispatching or invoicing',409); }
 function itemArray(value) {
  requireValue(Array.isArray(value)&&value.length>0&&value.length<=100,'Add between 1 and 100 SKU lines');
  requireValue(value.every(v=>v&&typeof v==='object'&&!Array.isArray(v)),'Each SKU line must be an object');
@@ -179,7 +179,7 @@ export async function amendOrder(db,id,v,actor){
  return db.transaction(async tx=>{
   const order=await lockOrder(tx,id);requireValue(order.version===v.version,'This order changed. Refresh before saving.',409);
   requireValue(['PO received','Ready for sourcing','Confirmed','Awaiting revised PO'].includes(order.stage),'Receive the original PO before starting an amendment',409);
-  const linked=await one(tx,'SELECT ((SELECT count(*) FROM dispatches WHERE order_id=$1)+(SELECT count(*) FROM invoices WHERE order_id=$1)+(SELECT count(*) FROM sourcing_links WHERE order_id=$1))::int AS count',[id]);
+  const linked=await one(tx,'SELECT ((SELECT count(*) FROM dispatches WHERE order_id=$1)+(SELECT count(*) FROM invoices WHERE order_id=$1)+(SELECT count(*) FROM sourcing_links WHERE order_id=$1)+(SELECT count(*) FROM purchase_orders WHERE order_id=$1))::int AS count',[id]);
   requireValue(!linked.count,'This order already has sourcing, dispatch or invoice activity. Coordinate the amendment with operations first.',409);
   const before=await orderSnapshot(tx,id);
   const notes=text(v.reason,'Reason for revision',500);
@@ -241,7 +241,7 @@ export async function updateRecord(db,entity,id,v,actor) {
    if(['PO received','Ready for sourcing','Confirmed'].includes(stage)){requireValue(po,'Add the Customer PO / confirmation reference before confirming');requireValue(ship,'Add the Ship-to address before confirming');}
    await validateEvidenceStage(tx,{...order,request_channel:requestChannel,po_channel:poChannel,po_received_date:poDate},stage);
    if(stage==='Cancelled'||stage==='Draft'){
-    const linked=await one(tx,'SELECT ((SELECT count(*) FROM dispatches WHERE order_id=$1)+(SELECT count(*) FROM invoices WHERE order_id=$1)+(SELECT count(*) FROM sourcing_links WHERE order_id=$1))::int AS count',[id]);
+    const linked=await one(tx,'SELECT ((SELECT count(*) FROM dispatches WHERE order_id=$1)+(SELECT count(*) FROM invoices WHERE order_id=$1)+(SELECT count(*) FROM sourcing_links WHERE order_id=$1)+(SELECT count(*) FROM purchase_orders WHERE order_id=$1))::int AS count',[id]);
     requireValue(!linked.count,'Linked activity prevents cancellation or returning to draft',409);
    }
    if(['PO received','Ready for sourcing','Confirmed'].includes(stage))await tx.query('UPDATE orders SET accepted_revision=order_revision WHERE id=$1',[id]);
@@ -308,7 +308,7 @@ export async function workspace(db,actor) {
      WHERE a.entity=ANY($1::text[]) ORDER BY a.id DESC LIMIT 100`,
      [['customers','orders','sourcing'].filter(entity=>can(actor,entity+'.read'))])
   };
-  result.orders=result.orders.map(({sourcing_line_count,sourcing_ready_count,...row})=>({...row,execution_status:row.stage!=='Confirmed'?row.stage:row.delivered>=row.qty?'Delivered':row.delivered>0?'Partially delivered':row.dispatched>0?'In transit':sourcing_ready_count===row.item_count?'Ready to dispatch':sourcing_line_count>0?'Sourcing':'Confirmed'}));
+  result.orders=result.orders.map(({sourcing_line_count,sourcing_ready_count,...row})=>({...row,execution_status:!['Confirmed','Ready for sourcing'].includes(row.stage)?row.stage:row.delivered>=row.qty?'Delivered':row.delivered>0?'Partially delivered':row.dispatched>0?'In transit':sourcing_ready_count===row.item_count?'Ready to dispatch':sourcing_line_count>0?'Sourcing':'Confirmed'}));
   if(actor&&!can(actor,'invoices.read'))for(const key of ['orders','order_items'])result[key]=result[key].map(({invoiced,...row})=>row);
   return result;
  });
