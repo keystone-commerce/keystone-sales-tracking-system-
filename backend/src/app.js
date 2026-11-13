@@ -1,4 +1,5 @@
-import {procurementRoutes} from './procurement.js';
+import {sampleRoutes} from './samples.js';
+import {procurementRoutes,supplierOptions} from './procurement.js';
 import {gmailMailer} from './otp/gmail.js';
 import {otpRoutes} from './otp/routes.js';
 import express from 'express';
@@ -60,10 +61,19 @@ export function createApp(db,config) {
  app.get('/api/auth/me',(req,res)=>res.json({...req.actor,session_id:undefined}));
  app.post('/api/auth/logout',async(req,res)=>{await auth.logout(req,res);res.status(204).end();});
  app.use('/api/access',accessRoutes(db));
+ app.use('/api/samples',(req,_res,next)=>{
+  requireValue(config.releaseScope==='full','Customer samples are not enabled in this release',404);
+  next();
+ },sampleRoutes(db,config.documentStore||createDocumentStore(config)));
  app.use('/api/procurement',(req,_res,next)=>{
   requireValue(config.releaseScope==='full','Supplier purchasing is not enabled in this release',404);
   next();
  },procurementRoutes(db,config.documentStore||createDocumentStore(config)));
+ app.get('/api/sourcing/suppliers',async(req,res)=>{
+  requirePermissions(req.actor,'sourcing.read');
+  requireValue(config.releaseScope==='full','Shared suppliers are not enabled in this release',404);
+  res.json(await supplierOptions(db));
+ });
  app.use('/api/orders',documentRoutes(db,config.documentStore||createDocumentStore(config)));
  app.get('/api/task-assignees',async(req,res)=>{
   requirePermissions(req.actor,'tasks.read','tasks.create');

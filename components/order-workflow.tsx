@@ -7,6 +7,7 @@ import {api,today,formatDate,type Row} from '@/lib/data';
 import {communicationMethods,documentsFor,fileAccept,uploadDocument,type OrderDocument} from '@/lib/documents';
 import {Button} from '@/components/ui/button';
 import {Input} from '@/components/ui/input';
+import {Textarea} from '@/components/ui/textarea';
 import {Dialog,DialogContent,DialogDescription,DialogHeader,DialogTitle} from '@/components/ui/dialog';
 function Files({docs,orderId,onChange,onRemove,editableRevision,busy}:{docs:OrderDocument[];orderId:string;onChange?:(doc:OrderDocument,remove:boolean)=>void;onRemove?:(doc:OrderDocument)=>void;editableRevision:number;busy:boolean}){
  return <div className="request-files">{docs.map(doc=>{
@@ -33,6 +34,7 @@ function Files({docs,orderId,onChange,onRemove,editableRevision,busy}:{docs:Orde
 function EvidenceForm({order,category,canEdit,onSaved,summary,actions}:{order:Row;category:'request'|'quotation'|'po';canEdit:boolean;onSaved:(message:string)=>void;summary?:ReactNode;actions?:ReactNode}){
  const qc=useQueryClient();const [channel,setChannel]=useState(String(category==='request'&&order.request_channel!=='Not recorded'?order.request_channel:category==='po'?order.po_channel||'':''));const [file,setFile]=useState<File|null>(null);const [fileReset,setFileReset]=useState(0);const [reference,setReference]=useState(String(category==='quotation'?order.quote_ref||'':order.po_ref||''));const [received,setReceived]=useState(String(order.po_received_date||today()).slice(0,10));const [busy,setBusy]=useState(false);const [error,setError]=useState('');
  const [showForm,setShowForm]=useState(false);
+ const [shipTo,setShipTo]=useState(String(order.ship_to||''));
  const requestChannel=String(order.request_channel||'');
  const hasRequestChannel=communicationMethods.includes(requestChannel);
  const requestLabel=order.sales_path==='agreed'?'Agreed price proof':'Request attachment';
@@ -42,9 +44,10 @@ function EvidenceForm({order,category,canEdit,onSaved,summary,actions}:{order:Ro
  const currentDocuments=documents.filter(d=>category!=='po'||d.order_revision===Number(order.order_revision));
  const hasMatchingPo=category==='po'&&currentDocuments.some(doc=>doc.channel===channel);
  async function submit(e:FormEvent){e.preventDefault();setBusy(true);setError('');try{
+  if(category==='po'&&!shipTo.trim())throw Error('Enter the ship-to address before recording the customer PO.');
   if(file){await uploadDocument(String(order.id),file,category,category==='request'?requestChannel:channel,Number(order.order_revision));setFile(null);setFileReset(value=>value+1);await qc.invalidateQueries({queryKey:['order-documents',order.id]});}
   if(category==='quotation')await api(`/orders/${order.id}`,{method:'PATCH',body:JSON.stringify({version:Number(order.version),stage:'Quoted',quote_ref:reference})});
-  if(category==='po')await api(`/orders/${order.id}`,{method:'PATCH',body:JSON.stringify({version:Number(order.version),stage:'PO received',po_ref:reference,po_channel:channel,po_received_date:received})});
+  if(category==='po')await api(`/orders/${order.id}`,{method:'PATCH',body:JSON.stringify({version:Number(order.version),stage:'PO received',po_ref:reference,po_channel:channel,po_received_date:received,ship_to:shipTo.trim()})});
   await Promise.all([qc.invalidateQueries({queryKey:['workspace']}),qc.invalidateQueries({queryKey:['order-history',order.id]})]);setShowForm(false);onSaved(category==='request'?'Attachment saved':category==='quotation'?'Quotation recorded as shared':'Customer PO received and recorded');
  }catch(err){setError((err as Error).message);}finally{setBusy(false);}}
  async function changeAttachment(doc:OrderDocument,remove:boolean){
@@ -60,6 +63,7 @@ function EvidenceForm({order,category,canEdit,onSaved,summary,actions}:{order:Ro
  const [poTrigger,setPoTrigger]=useState<HTMLButtonElement|null>(null);
  const addAttachment=(category==="po"||category==="request"&&hasRequestChannel)&&canEdit&&!accepted&&order.stage!=="Cancelled"&&(category==="po"||!showForm)&&!docs.error&&
   <Button type="button" size="sm" variant={category==="po"?"default":"outline"} ref={category==="po"?setPoTrigger:undefined} aria-haspopup={category==="po"?"dialog":undefined} disabled={docs.isPending} onClick={()=>{
+   if(category==="po")setShipTo(String(order.ship_to||""));
    if(category==="po"&&!channel&&currentDocuments.length)setChannel(currentDocuments[0].channel);
    setError("");setShowForm(true);
   }}>
@@ -71,6 +75,7 @@ function EvidenceForm({order,category,canEdit,onSaved,summary,actions}:{order:Ro
  const form=<form className="evidence-form" onSubmit={submit}>
  {category!=='request'&&<label>{category==='quotation'?'Quotation reference':'Customer PO number'}<Input required maxLength={200} value={reference} onChange={e=>setReference(e.target.value)}/></label>}
  {category==='po'&&<label>PO received on<Input type="date" required value={received} onChange={e=>setReceived(e.target.value)}/></label>}
+ {category==='po'&&<label className="wide">Ship-to address<Textarea required maxLength={1000} value={shipTo} onChange={e=>setShipTo(e.target.value)}/></label>}
  {category!=='request'&&<CommunicationChoices label={category==='quotation'?'Quotation shared through':'PO received through'} value={channel} onChange={setChannel} options={category==='po'?communicationMethods.filter(m=>m!=='Call'):communicationMethods} className="wide"/>}
  <label className="evidence-file">{category==='request'?requestLabel:category==='quotation'?'Quotation PDF or shared-message screenshot':hasMatchingPo?'Additional PO document (optional)':'Customer PO document'}<Input key={fileReset} type="file" accept={fileAccept} required={category==='request'||!currentDocuments.some(d=>d.channel===channel&&(category!=='quotation'||d.quote_revision===(order.stage==='Quoted'?Number(order.quote_version):Number(order.quote_version)+1)))} onChange={e=>setFile(e.target.files?.[0]||null)}/></label>
  <small>PNG / JPG / WebP / PDF · Max 5 MB</small>
