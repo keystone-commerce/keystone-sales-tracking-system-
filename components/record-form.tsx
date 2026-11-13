@@ -16,11 +16,20 @@ type Allocation={order_item_id:string;qty:string;rate_rupees:string;gst_percent:
 const options=(values:string[])=>values.map(value=>({value,label:value}));
 const newSku=(key:number):SkuInput=>({key,sku:'',description:'',unit_of_measure:'Nos',qty:'',rate_rupees:'',gst_percent:'18'});
 function addDays(value:string,days:number){const date=new Date(value+'T12:00:00');date.setDate(date.getDate()+days);return `${date.getFullYear()}-${String(date.getMonth()+1).padStart(2,'0')}-${String(date.getDate()).padStart(2,'0')}`;}
-export type FormRequest={entity:Register;record?:Row;orderId?:string;invoiceId?:string};
+export type FormRequest={entity:Register;record?:Row;orderId?:string;invoiceId?:string;customerId?:string};
 
 export function RecordForm({request,w,onClose,onSaved,onCreated}:{request:FormRequest;w:Workspace;onClose:()=>void;onSaved:(s:string)=>void;onCreated?:(id:string)=>void}) {
- const {entity,record,orderId,invoiceId}=request,editing=!!record;
- const active=w.orders.filter(o=>entity==='sourcing'?o.stage==='Ready for sourcing':['Ready for sourcing','Confirmed'].includes(String(o.stage)));
+ const {entity,record,orderId,invoiceId,customerId}=request,editing=!!record;
+ const integration=useQuery({
+  queryKey:['integrations'],enabled:entity==='sourcing',
+  queryFn:()=>api<{procurement?:{enabled:boolean}}>('/integrations')
+ });
+ const sharedSuppliers=integration.data?.procurement?.enabled===true;
+ const suppliers=useQuery({
+  queryKey:['procurement-suppliers'],enabled:entity==='sourcing'&&sharedSuppliers,staleTime:0,
+  queryFn:()=>api<Row[]>('/sourcing/suppliers')
+ });
+ const active=w.orders.filter(o=>entity==='sourcing'?o.stage==='Ready for sourcing'||sharedSuppliers&&o.stage==='Confirmed':['Ready for sourcing','Confirmed'].includes(String(o.stage)));
  const orderOptions=active.map(o=>({value:String(o.id),label:`${orderCode(o)} · ${o.customer_name} · ${o.description}`}));
  const customers=w.customers.map(c=>({value:String(c.id),label:String(c.name)}));
  const invoices=w.invoices.filter(i=>num(i.outstanding_paise)>0).map(i=>({value:String(i.id),label:`${i.number} · ${money(i.outstanding_paise)} outstanding`}));
@@ -29,12 +38,12 @@ export function RecordForm({request,w,onClose,onSaved,onCreated}:{request:FormRe
   queryFn:()=>api<{id:string;name:string;email:string}[]>('/task-assignees')
  });
  const initialOrder=w.orders.find(o=>o.id===(record?.order_id||orderId));
- const initialCustomer=w.customers.find(c=>c.id===initialOrder?.customer_id);
+ const initialCustomer=w.customers.find(c=>c.id===(initialOrder?.customer_id||customerId));
  const initial=():Record<string,string>=>({
-  request_channel:'',request_notes:'',sales_path:'agreed',stage:'Draft',status:entity==='sourcing'?'Requested':'Open',priority:'Normal',mode:'NEFT',
+  request_channel:'',request_notes:'',sales_path:customerId?'needs-pricing':'agreed',stage:customerId?'Enquiry':'Draft',status:entity==='sourcing'?'Requested':'Open',priority:'Normal',mode:'NEFT',
   invoice_date:today(),receipt_date:today(),dispatch_date:today(),due_date:addDays(today(),num(initialCustomer?.terms)),
   terms:'0',enquiry_received_date:today(),target_date:today(),expected_date:initialOrder?day(initialOrder.target_date):today(),order_id:orderId||'',
-  invoice_id:invoiceId||'',...Object.fromEntries(Object.entries(record||{}).map(([k,v])=>[k,k.endsWith('_date')||k==='eta'?day(v):String(v??'')]))
+  invoice_id:invoiceId||'',customer_id:customerId||'',ship_to:customerId?String(initialCustomer?.shipping_address??initialCustomer?.address??''):'',...Object.fromEntries(Object.entries(record||{}).map(([k,v])=>[k,k.endsWith('_date')||k==='eta'?day(v):String(v??'')]))
  });
  const allocationFor=(id:unknown):Allocation[]=>{
   const lines=editing&&entity==='dispatches'?w.dispatch_items.filter(i=>i.dispatch_id===record?.id):w.order_items.filter(i=>i.order_id===id);
@@ -72,7 +81,11 @@ export function RecordForm({request,w,onClose,onSaved,onCreated}:{request:FormRe
    {key:'order_id',label:'Sales order',type:'select',options:orderOptions,wide:true},
    {key:'order_item_id',label:'Order SKU',type:'select',options:orderItems.map(i=>({value:String(i.id),label:`${i.sku||'Legacy SKU'} · ${i.description}`})),wide:true},
    {key:'external_ref',label:'Sourcing reference',optional:true,wide:true}
-  ]:[]),{key:'status',label:'Vendor response',type:'select',options:vendorStatuses},{key:'supplier',label:'Vendor name',optional:true},{key:'vendor_gstin',label:'Vendor GSTIN',optional:true},{key:'vendor_phone',label:'Vendor phone',type:'tel',optional:true},{key:'vendor_email',label:'Vendor email',type:'email',optional:true},{key:'eta',label:'Expected supply date',type:'date',optional:true},{key:'notes',label:'Sourcing notes',type:'textarea',wide:true,optional:true}],
+  ]:[]),{key:'status',label:'Vendor response',type:'select',options:vendorStatuses},...(sharedSuppliers?[
+   {key:'supplier_id',label:'Supplier',type:'select',options:(suppliers.data||[]).map(supplier=>({value:String(supplier.id),label:String(supplier.name)})),optional:editing&&!record?.supplier_id}
+  ]:[
+   {key:'supplier',label:'Vendor name',optional:true},{key:'vendor_gstin',label:'Vendor GSTIN',optional:true},{key:'vendor_phone',label:'Vendor phone',type:'tel',optional:true},{key:'vendor_email',label:'Vendor email',type:'email',optional:true}
+  ]),{key:'eta',label:'Expected supply date',type:'date',optional:true},{key:'notes',label:'Sourcing notes',type:'textarea',wide:true,optional:true}],
   dispatches:editing?[
    {key:'status',label:'Shipment status',type:'select',options:options(['In transit','Partially delivered','Delivered','Returned'])},{key:'actual_date',label:'Actual delivery date',type:'date',optional:true},{key:'pod',label:'Proof of delivery reference / secure URL',wide:true,optional:true}
   ]:[
@@ -140,11 +153,13 @@ export function RecordForm({request,w,onClose,onSaved,onCreated}:{request:FormRe
  const invalidVendorGstin = entity === 'sourcing' && !!vendorGstin &&
   !/^\d{2}[A-Z]{5}\d{4}[A-Z][1-9A-Z]Z[0-9A-Z]$/.test(vendorGstin);
  return <Dialog open onOpenChange={open=>{if(!open)close();}}><DialogContent className={`max-h-[90dvh] overflow-y-auto ${showOrderLines||showAllocation||showDelivery?'sm:max-w-[960px]':'sm:max-w-[640px]'}`} onInteractOutside={e=>e.preventDefault()}><DialogHeader><DialogTitle>{entity==='orders'?(editing?'Update customer request':'New customer request'):`${editing?'Update':'Create'} ${singular[entity]}`}</DialogTitle><DialogDescription className="sr-only">{names[entity]}</DialogDescription></DialogHeader>
+ {entity==='sourcing'&&sharedSuppliers&&<div className="form-note">Select a supplier registered under Suppliers in Supplier sourcing. Contact details come from that supplier record. Create a separate reference for each supplier you contact about this SKU.</div>}
+ {entity==='sourcing'&&sharedSuppliers&&suppliers.isError&&<div className="error-box" role="alert">Could not load suppliers.<Button type="button" variant="outline" onClick={()=>void suppliers.refetch()}>Try again</Button></div>}
  {entity==='tasks'&&!editing&&assignees.isError&&<div className='error-box' role='alert'>Could not load team members. <Button type='button' variant='outline' onClick={()=>void assignees.refetch()}>Try again</Button></div>}
  <form onSubmit={e=>{e.preventDefault();if(!invalidVendorGstin)mutation.mutate();}} className="record-form">
  {order&&<div className="form-note">{orderCode(order)} · {order.customer_name}</div>}
  {entity==='orders'&&editing&&record?.stage==='Quoted'&&<div className="form-note">To revise prices: change the step to Pricing and save.</div>}
- <div className="field-grid">{fields[entity].map(f=>['request_channel','po_channel'].includes(f.key)?<CommunicationChoices key={f.key} className={f.wide?'wide':''} label={f.label} value={values[f.key]||''} onChange={value=>change(f.key,value)} options={(f.options||[]).map(option=>option.value)} required={!f.optional}/>:<label className={f.wide?'wide':''} key={f.key}><span>{f.label}{!f.optional&&<b> *</b>}</span>{f.type==='select'?<select required={!f.optional} value={values[f.key]||''} onChange={e=>change(f.key,e.target.value)}><option value="">Select…</option>{f.options?.map(op=><option key={op.value} value={op.value}>{op.label}</option>)}</select>:f.type==='textarea'?<Textarea required={!f.optional} maxLength={1000} value={values[f.key]||''} onChange={e=>change(f.key,e.target.value)}/>:<Input required={!f.optional} type={f.type||'text'} pattern={f.key==='contact_name'||f.key==='phone'?String.raw`.*S.*`:undefined} min={f.type==='number'?0:undefined} max={f.key==='terms'?365:undefined} step={f.key.endsWith('_rupees')?'0.01':'1'} maxLength={f.key==='gstin'||f.key==='vendor_gstin'?15:f.key==='phone'?40:f.key==='contact_name'?160:undefined} value={values[f.key]||''} aria-invalid={f.key==='vendor_gstin'&&invalidVendorGstin||undefined} aria-describedby={f.key==='vendor_gstin'?'vendor-gstin-hint':undefined} onChange={e=>change(f.key,f.key==='vendor_gstin'?e.target.value.trim().toUpperCase():e.target.value)}/>} {f.key==='vendor_gstin'&&<small id='vendor-gstin-hint' className={invalidVendorGstin?'text-destructive':'text-muted-foreground'}>{invalidVendorGstin?'Enter a valid 15-character GSTIN, e.g. 29ABCDE1234F1Z5.':'Optional · 15 characters'}</small>}</label>)}
+ <div className="field-grid">{fields[entity].map(f=>['request_channel','po_channel'].includes(f.key)?<CommunicationChoices key={f.key} className={f.wide?'wide':''} label={f.label} value={values[f.key]||''} onChange={value=>change(f.key,value)} options={(f.options||[]).map(option=>option.value)} required={!f.optional}/>:<label className={f.wide?'wide':''} key={f.key}><span>{f.label}{!f.optional&&<b> *</b>}</span>{f.type==='select'?<select required={!f.optional} disabled={!!customerId&&entity==='orders'&&f.key==='customer_id'} value={values[f.key]||''} onChange={e=>change(f.key,e.target.value)}><option value="">Select…</option>{f.options?.map(op=><option key={op.value} value={op.value}>{op.label}</option>)}</select>:f.type==='textarea'?<Textarea required={!f.optional} maxLength={1000} value={values[f.key]||''} onChange={e=>change(f.key,e.target.value)}/>:<Input required={!f.optional} type={f.type||'text'} pattern={f.key==='contact_name'||f.key==='phone'?String.raw`.*S.*`:undefined} min={f.type==='number'?0:undefined} max={f.key==='terms'?365:undefined} step={f.key.endsWith('_rupees')?'0.01':'1'} maxLength={f.key==='gstin'||f.key==='vendor_gstin'?15:f.key==='phone'?40:f.key==='contact_name'?160:undefined} value={values[f.key]||''} aria-invalid={f.key==='vendor_gstin'&&invalidVendorGstin||undefined} aria-describedby={f.key==='vendor_gstin'?'vendor-gstin-hint':undefined} onChange={e=>change(f.key,f.key==='vendor_gstin'?e.target.value.trim().toUpperCase():e.target.value)}/>} {f.key==='vendor_gstin'&&<small id='vendor-gstin-hint' className={invalidVendorGstin?'text-destructive':'text-muted-foreground'}>{invalidVendorGstin?'Enter a valid 15-character GSTIN, e.g. 29ABCDE1234F1Z5.':'Optional · 15 characters'}</small>}</label>)}
   {entity==='orders'&&!editing&&<label className="wide">
    <span>{values.sales_path==='agreed'?'Agreed price proof':'Request attachment'} (optional)</span>
    <Input type="file" className="file:mr-3" accept={fileAccept} onChange={e=>{setRequestFile(e.target.files?.[0]||null);setDirty(true);}}/>

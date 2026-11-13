@@ -1,3 +1,4 @@
+import {requireApprovedSamples} from './samples.js';
 import {CHANNELS,validateEvidenceStage} from './documents.js';
 import {randomUUID} from 'node:crypto';
 import {one} from './db.js';
@@ -18,6 +19,21 @@ function vendorDetails(values, existing = {}) {
  const email = text(values.vendor_email ?? existing.vendor_email ?? '', 'Vendor email', 254, true);
  requireValue(!email || /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email), 'Vendor email format is invalid');
  return [gstin, phone, email];
+}
+
+async function sourcingSupplier(tx,values,existing={}) {
+ const supplierId=values.supplier_id===undefined?existing.supplier_id:values.supplier_id;
+ if(supplierId){
+  const supplier=await one(tx,'SELECT id,name,gstin,phone,email FROM suppliers WHERE id=$1',[uuid(supplierId,'Supplier')]);
+  return {supplier_id:supplier.id,supplier:supplier.name,vendor_gstin:supplier.gstin,vendor_phone:supplier.phone,vendor_email:supplier.email};
+ }
+ const [gstin,phone,email]=vendorDetails(values,existing);
+ return {
+  supplier_id:null,supplier:text(values.supplier??existing.supplier??'','Vendor name',200,true),
+  vendor_gstin:gstin,
+  vendor_phone:phone,
+  vendor_email:email
+ };
 }
 
 function orderAgreement(values, existing = {}) {
@@ -129,9 +145,15 @@ export async function createRecord(db,entity,v,actor,{manualSourcing=false}={}) 
    if(manualSourcing)requireValue(order.stage==='Ready for sourcing','Mark the order ready for sourcing first',409);
    else if(order.stage!=='Ready for sourcing')executable(order);
    const lines=await allocatedItems(tx,order,{items:v.order_item_id?[{order_item_id:v.order_item_id,qty:1}]:undefined,qty:1});
-   const existing=await tx.query('SELECT id FROM sourcing_links WHERE order_item_id=$1',[lines[0].item.id]);
-   requireValue(!existing.rows.length,'Sourcing is already recorded for this SKU. Update the existing record.',409);
-   await tx.query('INSERT INTO sourcing_links(id,order_id,order_item_id,external_ref,status,supplier,eta,notes,vendor_gstin,vendor_phone,vendor_email) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)',[id,order.id,lines[0].item.id,text(v.external_ref??'','External sourcing reference',200,true),choice(v.status,['Requested','In progress','Ready','Blocked','Rejected'],'sourcing status'),text(v.supplier||'','Vendor name',200,true),v.eta?date(v.eta,'Supply date'):null,text(v.notes||'','Notes',1000,true),...vendorDetails(v)]);
+   const supplier=await sourcingSupplier(tx,v);
+   const existing=await tx.query('SELECT id FROM sourcing_links WHERE order_item_id=$1 AND supplier_id IS NOT DISTINCT FROM $2::uuid',[lines[0].item.id,supplier.supplier_id]);
+   requireValue(!existing.rows.length,'Sourcing is already recorded for this SKU and supplier. Update that reference.',409);
+   await tx.query('INSERT INTO sourcing_links(id,order_id,order_item_id,external_ref,status,supplier,eta,notes,vendor_gstin,vendor_phone,vendor_email,supplier_id) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)',[
+    id,order.id,lines[0].item.id,text(v.external_ref??'','External sourcing reference',200,true),
+    choice(v.status,['Requested','In progress','Ready','Blocked','Rejected'],'sourcing status'),supplier.supplier,
+    v.eta?date(v.eta,'Supply date'):null,text(v.notes||'','Notes',1000,true),
+    supplier.vendor_gstin,supplier.vendor_phone,supplier.vendor_email,supplier.supplier_id
+   ]);
   } else if(entity==='dispatches') {
    const order=await lockOrder(tx,v.order_id);executable(order);
    const lines=await allocatedItems(tx,order,v);
@@ -179,7 +201,7 @@ export async function amendOrder(db,id,v,actor){
  return db.transaction(async tx=>{
   const order=await lockOrder(tx,id);requireValue(order.version===v.version,'This order changed. Refresh before saving.',409);
   requireValue(['PO received','Ready for sourcing','Confirmed','Awaiting revised PO'].includes(order.stage),'Receive the original PO before starting an amendment',409);
-  const linked=await one(tx,'SELECT ((SELECT count(*) FROM dispatches WHERE order_id=$1)+(SELECT count(*) FROM invoices WHERE order_id=$1)+(SELECT count(*) FROM sourcing_links WHERE order_id=$1)+(SELECT count(*) FROM purchase_orders WHERE order_id=$1))::int AS count',[id]);
+  const linked=await one(tx,'SELECT ((SELECT count(*) FROM dispatches WHERE order_id=$1)+(SELECT count(*) FROM invoices WHERE order_id=$1)+(SELECT count(*) FROM sourcing_links WHERE order_id=$1)+(SELECT count(*) FROM purchase_orders WHERE order_id=$1 AND sample_round_id IS NULL))::int AS count',[id]);
   requireValue(!linked.count,'This order already has sourcing, dispatch or invoice activity. Coordinate the amendment with operations first.',409);
   const before=await orderSnapshot(tx,id);
   const notes=text(v.reason,'Reason for revision',500);
@@ -239,6 +261,7 @@ export async function updateRecord(db,entity,id,v,actor) {
    const owner=v.owner===undefined?order.owner:text(v.owner,'Owner',160);
    const target=v.target_date===undefined?order.target_date:date(v.target_date,'Target delivery');
    if(['PO received','Ready for sourcing','Confirmed'].includes(stage)){requireValue(po,'Add the Customer PO / confirmation reference before confirming');requireValue(ship,'Add the Ship-to address before confirming');}
+   await requireApprovedSamples(tx,id,stage);
    await validateEvidenceStage(tx,{...order,request_channel:requestChannel,po_channel:poChannel,po_received_date:poDate},stage);
    if(stage==='Cancelled'||stage==='Draft'){
     const linked=await one(tx,'SELECT ((SELECT count(*) FROM dispatches WHERE order_id=$1)+(SELECT count(*) FROM invoices WHERE order_id=$1)+(SELECT count(*) FROM sourcing_links WHERE order_id=$1)+(SELECT count(*) FROM purchase_orders WHERE order_id=$1))::int AS count',[id]);
@@ -278,7 +301,16 @@ export async function updateRecord(db,entity,id,v,actor) {
    await tx.query('UPDATE tasks SET status=$1,version=version+1 WHERE id=$2',[choice(v.status,['Open','In progress','Blocked','Completed'],'task status'),id]);
   } else if(entity==='sourcing') {
    const link=await one(tx,'SELECT * FROM sourcing_links WHERE id=$1 FOR UPDATE',[id]);requireValue(link.version===v.version,'Sourcing reference changed. Refresh before saving.',409);
-   await tx.query('UPDATE sourcing_links SET status=$1,supplier=$2,eta=$3,notes=$4,vendor_gstin=$6,vendor_phone=$7,vendor_email=$8,version=version+1,updated_at=now() WHERE id=$5',[choice(v.status,['Requested','In progress','Ready','Blocked','Rejected'],'sourcing status'),text(v.supplier||'','Vendor name',200,true),v.eta?date(v.eta,'ETA'):null,text(v.notes||'','Notes',1000,true),id,...vendorDetails(v,link)]);
+   const supplier=await sourcingSupplier(tx,v,link);
+   if(supplier.supplier_id!==link.supplier_id){
+    const quotes=await tx.query('SELECT id FROM supplier_quotes WHERE sourcing_link_id=$1 LIMIT 1',[link.id]);
+    requireValue(!quotes.rows.length,'This reference has quotations. Keep its supplier and create a separate sourcing reference for another vendor.',409);
+   }
+   await tx.query('UPDATE sourcing_links SET status=$1,supplier=$2,eta=$3,notes=$4,vendor_gstin=$6,vendor_phone=$7,vendor_email=$8,supplier_id=$9,version=version+1,updated_at=now() WHERE id=$5',[
+    choice(v.status,['Requested','In progress','Ready','Blocked','Rejected'],'sourcing status'),supplier.supplier,
+    v.eta?date(v.eta,'ETA'):null,text(v.notes||'','Notes',1000,true),id,
+    supplier.vendor_gstin,supplier.vendor_phone,supplier.vendor_email,supplier.supplier_id
+   ]);
   }
   await audit(tx,actor,'Updated',entity,id,entity==='orders'?{before,after:await orderSnapshot(tx,id)}:v);return {id};
  });
@@ -290,7 +322,7 @@ export async function workspace(db,actor) {
   const rows=async (permission,sql,params)=>!actor||can(actor,permission)?(await tx.query(sql,params)).rows:[];
   const result={
    customers:await rows('customers.read','SELECT * FROM customers ORDER BY name'),
-   orders:await rows('orders.read',`SELECT o.*,c.name AS customer_name,x.qty::int AS qty,x.item_count::int AS item_count,x.subtotal_paise::bigint AS subtotal_paise,x.total_paise::bigint AS total_paise,(SELECT count(*)::int FROM sourcing_links sl WHERE sl.order_id=o.id) AS sourcing_line_count,(SELECT count(*)::int FROM sourcing_links sl WHERE sl.order_id=o.id AND sl.status='Ready') AS sourcing_ready_count,COALESCE(d.dispatched,0)::int AS dispatched,COALESCE(d.delivered,0)::int AS delivered,COALESCE(i.invoiced,0)::int AS invoiced FROM orders o JOIN customers c ON c.id=o.customer_id JOIN (SELECT order_id,SUM(qty) qty,count(*) item_count,CASE WHEN count(rate_paise)=count(*) THEN SUM(qty::numeric*rate_paise) END subtotal_paise,CASE WHEN count(rate_paise)=count(*) THEN SUM(qty::numeric*rate_paise+floor((qty::numeric*rate_paise*gst_bps+5000)/10000)) END total_paise FROM order_items GROUP BY order_id) x ON x.order_id=o.id LEFT JOIN (SELECT order_id,SUM(qty) dispatched,SUM(delivered_qty) delivered FROM dispatch_items GROUP BY order_id) d ON d.order_id=o.id LEFT JOIN (SELECT order_id,SUM(qty) invoiced FROM invoice_items GROUP BY order_id) i ON i.order_id=o.id ORDER BY o.created_at DESC`),
+   orders:await rows('orders.read',`SELECT o.*,c.name AS customer_name,x.qty::int AS qty,x.item_count::int AS item_count,x.subtotal_paise::bigint AS subtotal_paise,x.total_paise::bigint AS total_paise,(SELECT count(DISTINCT sl.order_item_id)::int FROM sourcing_links sl WHERE sl.order_id=o.id) AS sourcing_line_count,(SELECT count(DISTINCT sl.order_item_id)::int FROM sourcing_links sl WHERE sl.order_id=o.id AND sl.status='Ready') AS sourcing_ready_count,COALESCE(d.dispatched,0)::int AS dispatched,COALESCE(d.delivered,0)::int AS delivered,COALESCE(i.invoiced,0)::int AS invoiced FROM orders o JOIN customers c ON c.id=o.customer_id JOIN (SELECT order_id,SUM(qty) qty,count(*) item_count,CASE WHEN count(rate_paise)=count(*) THEN SUM(qty::numeric*rate_paise) END subtotal_paise,CASE WHEN count(rate_paise)=count(*) THEN SUM(qty::numeric*rate_paise+floor((qty::numeric*rate_paise*gst_bps+5000)/10000)) END total_paise FROM order_items GROUP BY order_id) x ON x.order_id=o.id LEFT JOIN (SELECT order_id,SUM(qty) dispatched,SUM(delivered_qty) delivered FROM dispatch_items GROUP BY order_id) d ON d.order_id=o.id LEFT JOIN (SELECT order_id,SUM(qty) invoiced FROM invoice_items GROUP BY order_id) i ON i.order_id=o.id ORDER BY o.created_at DESC`),
    order_items:await rows('orders.read',`SELECT oi.*,COALESCE(d.dispatched,0)::int AS dispatched,COALESCE(d.delivered,0)::int AS delivered,COALESCE(i.invoiced,0)::int AS invoiced FROM order_items oi LEFT JOIN (SELECT order_item_id,SUM(qty) dispatched,SUM(delivered_qty) delivered FROM dispatch_items GROUP BY order_item_id) d ON d.order_item_id=oi.id LEFT JOIN (SELECT order_item_id,SUM(qty) invoiced FROM invoice_items GROUP BY order_item_id) i ON i.order_item_id=oi.id ORDER BY oi.order_id,oi.position`),
    sourcing:await rows('sourcing.read','SELECT s.*,oi.sku,oi.description AS item_description FROM sourcing_links s JOIN order_items oi ON oi.id=s.order_item_id ORDER BY s.updated_at DESC'),
    dispatches:await rows('dispatches.read','SELECT d.*,(SELECT count(*)::int FROM dispatch_items di WHERE di.dispatch_id=d.id) AS item_count FROM dispatches d ORDER BY d.created_at DESC'),

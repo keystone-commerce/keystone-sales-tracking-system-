@@ -5,6 +5,7 @@ import {audit} from './service.js';
 import {requireValue,text,integer,money,date,uuid,choice,total,capacity} from './domain.js';
 import {can,requirePermissions} from './access/permissions.js';
 import {effectiveAccess} from './access/resolver.js';
+import {requireSamplingStage,sampleEvent} from './samples.js';
 import {procurementDocumentRoutes} from './procurement-documents.js';
 
 const acceptedStages = ['Ready for sourcing','Confirmed'];
@@ -24,11 +25,27 @@ async function checkApprover(tx,id) {
   'Choose an active user with supplier approval permission');
 }
 
-async function lockedOrder(tx,id) {
+async function lockedOrder(tx,id,sampleId) {
  const order = await one(tx,'SELECT * FROM orders WHERE id=$1 FOR UPDATE',[uuid(id,'Sales order')]);
- requireValue(acceptedStages.includes(order.stage)&&order.order_revision===order.accepted_revision,
+ if(sampleId)requireSamplingStage(order);
+ else requireValue(acceptedStages.includes(order.stage)&&order.order_revision===order.accepted_revision,
   'Mark the accepted order ready for sourcing first',409);
  return order;
+}
+
+async function requestedSample(tx,sampleId,orderId,itemId){
+ const sample=await one(tx,'SELECT * FROM sample_rounds WHERE id=$1 AND order_id=$2 AND order_item_id=$3 FOR UPDATE',
+  [uuid(sampleId,'Sample round'),orderId,itemId]);
+ requireValue(sample.status==='Requested','This sample round already has a supplier PO',409);
+ return sample;
+}
+
+function canPayOrder(order,sampleId){
+ return sampleId?!['On hold','Cancelled'].includes(order.stage):acceptedStages.includes(order.stage);
+}
+
+export async function supplierOptions(db) {
+ return (await db.query('SELECT id,name,gstin,phone,email FROM suppliers ORDER BY name')).rows;
 }
 
 export function procurementRoutes(db,store) {
@@ -46,15 +63,19 @@ export function procurementRoutes(db,store) {
    const rows = async sql=>(await tx.query(sql)).rows;
    return {
     suppliers:await rows('SELECT * FROM suppliers ORDER BY name'),
-    quotes:await rows('SELECT q.*,s.name AS supplier_name,oi.sku,oi.description FROM supplier_quotes q JOIN suppliers s ON s.id=q.supplier_id JOIN order_items oi ON oi.id=q.order_item_id ORDER BY q.created_at DESC'),
-    purchase_orders:await rows('SELECT p.*,s.name AS supplier_name,oi.sku,oi.description,COALESCE(r.reserved,0)::bigint AS reserved_paise,COALESCE(pay.paid,0)::bigint AS paid_paise FROM purchase_orders p JOIN suppliers s ON s.id=p.supplier_id JOIN order_items oi ON oi.id=p.order_item_id LEFT JOIN (SELECT purchase_order_id,SUM(amount_paise) AS reserved FROM supplier_payment_requests WHERE status NOT IN (\'Rejected\',\'Cancelled\') GROUP BY purchase_order_id) r ON r.purchase_order_id=p.id LEFT JOIN (SELECT r.purchase_order_id,SUM(p.amount_paise) AS paid FROM supplier_payments p JOIN supplier_payment_requests r ON r.id=p.request_id GROUP BY r.purchase_order_id) pay ON pay.purchase_order_id=p.id ORDER BY p.created_at DESC'),
-    requests:await rows('SELECT r.*,p.reference AS po_reference,s.name AS supplier_name,u.name AS raised_by,COALESCE(pay.paid,0)::bigint AS paid_paise FROM supplier_payment_requests r JOIN purchase_orders p ON p.id=r.purchase_order_id JOIN suppliers s ON s.id=p.supplier_id JOIN users u ON u.id=r.created_by LEFT JOIN (SELECT request_id,SUM(amount_paise) AS paid FROM supplier_payments GROUP BY request_id) pay ON pay.request_id=r.id ORDER BY r.created_at DESC'),
+    quotes:await rows('SELECT q.*,r.round_number,r.status AS sample_status,s.name AS supplier_name,oi.sku,oi.description FROM supplier_quotes q LEFT JOIN sample_rounds r ON r.id=q.sample_round_id JOIN suppliers s ON s.id=q.supplier_id JOIN order_items oi ON oi.id=q.order_item_id ORDER BY q.created_at DESC'),
+    purchase_orders:await rows('SELECT p.*,r0.round_number,s.name AS supplier_name,oi.sku,oi.description,COALESCE(r.reserved,0)::bigint AS reserved_paise,COALESCE(pay.paid,0)::bigint AS paid_paise FROM purchase_orders p LEFT JOIN sample_rounds r0 ON r0.id=p.sample_round_id JOIN suppliers s ON s.id=p.supplier_id JOIN order_items oi ON oi.id=p.order_item_id LEFT JOIN (SELECT purchase_order_id,SUM(amount_paise) AS reserved FROM supplier_payment_requests WHERE status NOT IN (\'Rejected\',\'Cancelled\') GROUP BY purchase_order_id) r ON r.purchase_order_id=p.id LEFT JOIN (SELECT r.purchase_order_id,SUM(p.amount_paise) AS paid FROM supplier_payments p JOIN supplier_payment_requests r ON r.id=p.request_id GROUP BY r.purchase_order_id) pay ON pay.purchase_order_id=p.id ORDER BY p.created_at DESC'),
+    requests:await rows('SELECT r.*,p.sample_round_id,p.reference AS po_reference,s.name AS supplier_name,u.name AS raised_by,COALESCE(pay.paid,0)::bigint AS paid_paise FROM supplier_payment_requests r JOIN purchase_orders p ON p.id=r.purchase_order_id JOIN suppliers s ON s.id=p.supplier_id JOIN users u ON u.id=r.created_by LEFT JOIN (SELECT request_id,SUM(amount_paise) AS paid FROM supplier_payments GROUP BY request_id) pay ON pay.request_id=r.id ORDER BY r.created_at DESC'),
     approvals:await rows('SELECT a.*,u.name AS actor_name FROM supplier_approvals a JOIN users u ON u.id=a.actor_id ORDER BY a.created_at'),
-    payments:await rows('SELECT p.*,r.reference AS request_reference FROM supplier_payments p JOIN supplier_payment_requests r ON r.id=p.request_id ORDER BY p.created_at DESC'),
+    payments:await rows('SELECT p.*,po.sample_round_id,r.reference AS request_reference FROM supplier_payments p JOIN supplier_payment_requests r ON r.id=p.request_id JOIN purchase_orders po ON po.id=r.purchase_order_id ORDER BY p.created_at DESC'),
     policy:await one(tx,'SELECT * FROM supplier_approval_policy WHERE id=1'),
     approvers:await eligibleApprovers(tx)
    };
   }));
+ });
+
+ router.get('/suppliers',async(_req,res)=>{
+  res.json(await supplierOptions(db));
  });
 
  router.post('/suppliers',async(req,res)=>{
@@ -79,17 +100,25 @@ export function procurementRoutes(db,store) {
   requirePermissions(req.actor,'procurement.create','orders.read');
   const v=req.body,id=randomUUID();
   await db.transaction(async tx=>{
-   const order=await lockedOrder(tx,v.order_id);
+   const sampleId=v.sample_round_id||null;
+   const order=await lockedOrder(tx,v.order_id,sampleId);
    await one(tx,'SELECT id FROM order_items WHERE id=$1 AND order_id=$2',[uuid(v.order_item_id,'Order SKU'),order.id]);
    await one(tx,'SELECT id FROM suppliers WHERE id=$1',[uuid(v.supplier_id,'Supplier')]);
+   if(sampleId)await requestedSample(tx,sampleId,order.id,v.order_item_id);
+   requireValue(!sampleId||!v.sourcing_link_id,'Choose a supplier for the sample round');
+   if(v.sourcing_link_id){
+    await one(tx,'SELECT id FROM sourcing_links WHERE id=$1 AND order_id=$2 AND order_item_id=$3 AND supplier_id=$4',
+     [uuid(v.sourcing_link_id,'Sourcing reference'),order.id,v.order_item_id,v.supplier_id]);
+   }
    const qty=integer(v.qty,'Quotation quantity');
-   const rate=money(v.rate_paise,'Supplier rate');
+   const rate=sampleId?integer(v.rate_paise,'Supplier rate',0,10_000_000_000):money(v.rate_paise,'Supplier rate');
+   const courier=sampleId?integer(v.courier_paise??0,'Courier charge',0,10_000_000_000):0;
    const gst=integer(v.gst_bps,'GST',0,10000);
-   total(qty,rate,gst);
+   requireValue(Number.isSafeInteger(total(qty,rate,gst)+courier),'Amount is too large');
    await tx.query(
-    'INSERT INTO supplier_quotes(id,order_id,order_item_id,supplier_id,reference,qty,rate_paise,gst_bps,quote_date,notes,created_by) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)',
+    'INSERT INTO supplier_quotes(id,order_id,order_item_id,supplier_id,reference,qty,rate_paise,gst_bps,quote_date,notes,created_by,sourcing_link_id,sample_round_id,courier_paise) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)',
     [id,order.id,v.order_item_id,v.supplier_id,text(v.reference,'Quotation reference',200),qty,rate,gst,
-     date(v.quote_date,'Quotation date'),text(v.notes||'','Quotation notes',1000,true),req.actor.id]);
+     date(v.quote_date,'Quotation date'),text(v.notes||'','Quotation notes',1000,true),req.actor.id,v.sourcing_link_id||null,sampleId,courier]);
    await audit(tx,req.actor,'Supplier quotation recorded','orders',order.id,{quote_id:id});
   });
   res.status(201).json({id});
@@ -100,19 +129,28 @@ export function procurementRoutes(db,store) {
   const v=req.body,id=randomUUID();
   await db.transaction(async tx=>{
    const quote=await one(tx,'SELECT * FROM supplier_quotes WHERE id=$1',[uuid(v.quote_id,'Supplier quotation')]);
-   const order=await lockedOrder(tx,quote.order_id);
+   const order=await lockedOrder(tx,quote.order_id,quote.sample_round_id);
    const item=await one(tx,'SELECT * FROM order_items WHERE id=$1',[quote.order_item_id]);
    const qty=integer(v.qty,'Purchase quantity');
-   const allocated=await one(tx,'SELECT COALESCE(SUM(qty),0)::int AS qty FROM purchase_orders WHERE order_item_id=$1',[item.id]);
+   if(quote.sample_round_id){
+    const sample=await requestedSample(tx,quote.sample_round_id,order.id,item.id);
+    capacity(sample.qty,0,qty,'Sample purchase quantity');
+   }else{
+    const allocated=await one(tx,'SELECT COALESCE(SUM(qty),0)::int AS qty FROM purchase_orders WHERE order_item_id=$1 AND sample_round_id IS NULL',[item.id]);
+    capacity(item.qty,allocated.qty,qty,'Purchase quantity');
+   }
    const quoted=await one(tx,'SELECT COALESCE(SUM(qty),0)::int AS qty FROM purchase_orders WHERE quote_id=$1',[quote.id]);
-   capacity(item.qty,allocated.qty,qty,'Purchase quantity');
    capacity(quote.qty,quoted.qty,qty,'Selected quotation quantity');
    const ordered=date(v.order_date,'PO date'),expected=date(v.expected_date,'Expected supply date');
    requireValue(expected>=ordered,'Expected supply cannot precede the PO date');
    await tx.query(
-    'INSERT INTO purchase_orders(id,quote_id,order_id,order_item_id,supplier_id,reference,qty,rate_paise,gst_bps,total_paise,order_date,expected_date,selection_reason,created_by) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)',
+    'INSERT INTO purchase_orders(id,quote_id,order_id,order_item_id,supplier_id,reference,qty,rate_paise,gst_bps,total_paise,order_date,expected_date,selection_reason,created_by,sample_round_id) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)',
     [id,quote.id,order.id,item.id,quote.supplier_id,text(v.reference,'Supplier PO reference',200),qty,quote.rate_paise,quote.gst_bps,
-     total(qty,Number(quote.rate_paise),quote.gst_bps),ordered,expected,text(v.selection_reason,'Supplier selection reason',1000),req.actor.id]);
+     total(qty,Number(quote.rate_paise),quote.gst_bps)+Number(quote.courier_paise),ordered,expected,text(v.selection_reason,'Supplier selection reason',1000),req.actor.id,quote.sample_round_id]);
+   if(quote.sample_round_id){
+    await tx.query("UPDATE sample_rounds SET status='Ordered',version=version+1 WHERE id=$1",[quote.sample_round_id]);
+    await sampleEvent(tx,quote.sample_round_id,req.actor.id,'Ordered',ordered,qty,v.reference,v.selection_reason);
+   }
    await audit(tx,req.actor,'Supplier PO issued','orders',order.id,{purchase_order_id:id,quote_id:quote.id,qty});
   });
   res.status(201).json({id});
@@ -141,7 +179,7 @@ export function procurementRoutes(db,store) {
   await db.transaction(async tx=>{
    const po=await one(tx,'SELECT * FROM purchase_orders WHERE id=$1 FOR UPDATE',[uuid(v.purchase_order_id,'Supplier PO')]);
    const order=await one(tx,'SELECT stage FROM orders WHERE id=$1 FOR SHARE',[po.order_id]);
-   requireValue(acceptedStages.includes(order.stage),'The sales order is on hold or awaiting acceptance',409);
+   requireValue(canPayOrder(order,po.sample_round_id),'The sales order is on hold or awaiting acceptance',409);
    const amount=money(v.amount_paise);
    const reserved=await one(tx,"SELECT COALESCE(SUM(amount_paise),0)::bigint AS amount FROM supplier_payment_requests WHERE purchase_order_id=$1 AND status NOT IN ('Rejected','Cancelled')",[po.id]);
    requireValue(amount<=Number(po.total_paise)-Number(reserved.amount),'Request exceeds the unallocated purchase order balance',409);
@@ -203,8 +241,8 @@ export function procurementRoutes(db,store) {
     return;
    }
    requireValue(request.status==='Approved','Only fully approved requests can be paid',409);
-   const order=await one(tx,'SELECT o.stage FROM orders o JOIN purchase_orders p ON p.order_id=o.id WHERE p.id=$1 FOR SHARE OF o',[request.purchase_order_id]);
-   requireValue(acceptedStages.includes(order.stage),'Release the sales order hold before paying',409);
+   const order=await one(tx,'SELECT o.stage,p.sample_round_id FROM orders o JOIN purchase_orders p ON p.order_id=o.id WHERE p.id=$1 FOR SHARE OF o',[request.purchase_order_id]);
+   requireValue(canPayOrder(order,order.sample_round_id),'Release the sales order hold before paying',409);
    const paid=await one(tx,'SELECT COALESCE(SUM(amount_paise),0)::bigint AS amount FROM supplier_payments WHERE request_id=$1',[request.id]);
    requireValue(amount<=Number(request.amount_paise)-Number(paid.amount),'Payment exceeds the approved request balance',409);
    const po=await one(tx,'SELECT order_date FROM purchase_orders WHERE id=$1',[request.purchase_order_id]);

@@ -22,8 +22,8 @@ export async function cleanUncommittedObject(db,store,id,stored,table='order_doc
  if(!stored)return;
  try{
   // A failed COMMIT acknowledgement does not prove the metadata was rolled back.
-  const query=table==='procurement_documents'?'SELECT id FROM procurement_documents WHERE id=$1':'SELECT id FROM order_documents WHERE id=$1';
-  const existing=await db.query(query,[id]);
+  const queries={order_documents:'SELECT id FROM order_documents WHERE id=$1',procurement_documents:'SELECT id FROM procurement_documents WHERE id=$1',sample_documents:'SELECT id FROM sample_documents WHERE id=$1'};
+  const existing=await db.query(queries[table],[id]);
   if(!existing.rows.length)await store.remove(stored);
  }catch(error){console.error({event:'document_cleanup_required',documentId:id,code:error.code||error.name});}
 }

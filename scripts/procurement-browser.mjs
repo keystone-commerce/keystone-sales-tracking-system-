@@ -20,6 +20,10 @@ const order=await createRecord(db,'orders',{
  owner:'Sales',ship_to:'ABC Bengaluru',target_date:'2027-02-10',
  items:[{sku:'HELMET-100',description:'Safety helmet',qty:100,rate_paise:100000,gst_bps:0}]
 },admin);
+const enquiry=await createRecord(db,'orders',{
+ customer_id:customer.id,description:'Branded helmet enquiry',stage:'Enquiry',sales_path:'needs-pricing',request_channel:'Email',
+ owner:'Sales',target_date:'2027-02-10',items:[{sku:'SAMPLE-HELMET',description:'Branded helmet',qty:100,gst_bps:0}]
+},admin);
 const server=createApp(db,{releaseScope:'full',secret:'purchasing-ui-secret-at-least-32-characters',frontendOrigin:origin,production:false}).listen(0,'127.0.0.1');
 await new Promise(resolve=>server.once('listening',resolve));
 const web=spawn(process.execPath,['node_modules/next/dist/bin/next','dev','-p','3309'],{
@@ -32,8 +36,9 @@ async function login(page,email){
  await page.getByLabel('Password',{exact:true}).fill(password);
  await page.getByRole('button',{name:'Sign in',exact:true}).click();
  await expect(page.getByRole('heading',{name:'Operations overview',exact:true})).toBeVisible();
- await page.locator('nav').getByRole('button',{name:'Supplier purchasing',exact:true}).click();
- await expect(page.getByRole('heading',{name:'Purchase orders',exact:true})).toBeVisible();
+ await page.locator('nav').getByRole('button',{name:'Supplier sourcing',exact:true}).click();
+ await expect(page.getByRole('heading',{name:'Suppliers',exact:true})).toBeVisible();
+ await expect(page.locator('nav').getByRole('button',{name:/^(Supplier purchasing|Sourcing handoff)$/})).toHaveCount(0);
 }
 async function save(page){
  await page.getByRole('dialog').getByRole('button',{name:'Save',exact:true}).click();
@@ -64,11 +69,21 @@ try{
  await save(page);
 
  const purchasing=(await db.query('SELECT id FROM suppliers')).rows[0];
+ await page.getByRole('button',{name:'Sourcing references',exact:true}).click();
+ await page.getByRole('button',{name:'New sourcing reference',exact:true}).click();
+ let sourcingDialog=page.getByRole('dialog');
+ await sourcingDialog.getByLabel('Sales order',{exact:false}).selectOption(order.id);
+ await sourcingDialog.getByLabel('Order SKU',{exact:false}).selectOption(order.item_ids[0]);
+ await sourcingDialog.getByLabel('Supplier',{exact:false}).selectOption(purchasing.id);
+ await sourcingDialog.getByLabel('Sourcing reference',{exact:false}).fill('SRC-HELMET-XYZ');
+ await expect(sourcingDialog.getByLabel('Vendor name',{exact:false})).toHaveCount(0);
+ await sourcingDialog.getByRole('button',{name:'Create sourcing reference',exact:true}).click();
+ await expect(page.getByRole('dialog')).toHaveCount(0);
+ const sourcingReference=(await db.query('SELECT id FROM sourcing_links WHERE supplier_id=$1',[purchasing.id])).rows[0];
+ await page.locator('nav').getByRole('button',{name:'Supplier sourcing',exact:true}).click();
  await page.getByRole('button',{name:'Supplier quotations',exact:true}).click();
  await page.getByRole('button',{name:'Add supplier quotation',exact:true}).click();
- await page.getByLabel('Ready sales order').selectOption(order.id);
- await page.getByLabel('Order SKU',{exact:true}).selectOption(order.item_ids[0]);
- await page.getByLabel('Supplier',{exact:true}).selectOption(purchasing.id);
+ await page.getByLabel('Sourcing reference',{exact:true}).selectOption(sourcingReference.id);
  await page.getByLabel('Supplier quotation reference').fill('XYZ-QUOTE-100');
  await page.getByLabel('Quoted quantity').fill('100');
  await page.getByLabel('Supplier unit rate').fill('700');
@@ -107,7 +122,7 @@ try{
  await page.getByRole('button',{name:'Payment requests',exact:true}).click();
  await page.reload();
  await expect(page.getByRole('heading',{name:'Operations overview',exact:true})).toBeVisible();
- await page.locator('nav').getByRole('button',{name:'Supplier purchasing',exact:true}).click();
+ await page.locator('nav').getByRole('button',{name:'Supplier sourcing',exact:true}).click();
  await page.getByRole('button',{name:'Payment requests',exact:true}).click();
  await page.getByRole('button',{name:'Record payment',exact:true}).click();
  await page.getByLabel('UTR / bank reference').fill('BANK-ADVANCE-100');
@@ -124,8 +139,67 @@ try{
  await page.screenshot({path:'work/procurement-mobile.png',fullPage:true});
  const paid=(await db.query('SELECT SUM(amount_paise) AS paid FROM supplier_payments')).rows[0];
  expect(Number(paid.paid)).toBe(2100000);
+ await page.setViewportSize({width:1440,height:1000});
+ async function openCustomer(){
+  await page.locator('nav').getByRole('button',{name:'Customers',exact:true}).click();
+  await page.getByRole('button',{name:'View workflow'}).click();
+  return page.getByRole('dialog');
+ }
+ let workflow=await openCustomer();
+ await workflow.getByRole('button',{name:'New enquiry',exact:true}).click();
+ await expect(page.getByRole('dialog').getByLabel('Customer',{exact:false}).first()).toHaveValue(customer.id);
+ await page.getByRole('dialog').getByRole('button',{name:'Cancel',exact:true}).click();
+ await workflow.getByRole('button',{name:'Sample requests',exact:true}).click();
+ await workflow.getByLabel('Enquiry / order').selectOption(enquiry.id);
+ await workflow.getByRole('button',{name:'Request sample',exact:true}).click();
+ await workflow.getByLabel('SKU',{exact:true}).selectOption(enquiry.item_ids[0]);
+ await workflow.getByLabel('Sample type').fill('Pre-production');
+ await workflow.getByLabel('Confirmed product specifications').fill('Size M, blue shell, ABC logo');
+ await workflow.getByRole('button',{name:'Save sample request',exact:true}).click();
+ await expect(workflow.getByText('Size M, blue shell, ABC logo',{exact:true})).toBeVisible();
+ await page.keyboard.press('Escape');
+ await page.locator('nav').getByRole('button',{name:'Supplier sourcing',exact:true}).click();
+ await page.getByRole('button',{name:'Sample requests',exact:true}).click();
+ await page.getByRole('button',{name:'Add sample quotation',exact:true}).click();
+ await page.getByRole('dialog').getByLabel('Supplier',{exact:true}).selectOption(purchasing.id);
+ await page.getByLabel('Supplier quotation reference').fill('SAMPLE-QUOTE');
+ await page.getByLabel('Supplier unit rate').fill('0');
+ await save(page);
+ await expect(page.getByRole('cell',{name:'SAMPLE-QUOTE',exact:true})).toBeVisible();
+ await expect(page.getByRole('cell',{name:'XYZ-QUOTE-100',exact:true})).toHaveCount(0);
+ await page.getByRole('button',{name:'Select / issue PO',exact:true}).click();
+ await page.getByLabel('Supplier PO reference').fill('SAMPLE-HELMET-PO');
+ await page.getByLabel('Supplier selection reason').fill('Free pre-production sample');
+ await save(page);
+ workflow=await openCustomer();
+ await workflow.getByRole('button',{name:'QC & issue',exact:true}).click();
+ await workflow.getByLabel('Enquiry / order').selectOption(enquiry.id);
+ await workflow.getByRole('button',{name:'Record receipt',exact:true}).click();
+ await workflow.getByRole('button',{name:'Save activity',exact:true}).click();
+ await workflow.getByLabel('QC photos').setInputFiles({name:'helmet-qc.png',mimeType:'image/png',
+  buffer:Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+a2ZkAAAAASUVORK5CYII=','base64')});
+ await workflow.getByRole('button',{name:'Upload QC photo',exact:true}).click();
+ const photo=workflow.getByRole('img',{name:'helmet-qc.png'});
+ await expect(photo).toBeVisible();
+ await expect.poll(()=>photo.evaluate(image=>image.naturalWidth)).toBeGreaterThan(0);
+ await workflow.getByRole('button',{name:'Pass QC',exact:true}).click();
+ await workflow.getByLabel('QC findings / defects').fill('Correct size and branding');
+ await workflow.getByRole('button',{name:'Save activity',exact:true}).click();
+ await workflow.getByRole('button',{name:'Issue to customer',exact:true}).click();
+ await workflow.getByLabel('Challan / tracking / POD reference').fill('SAMPLE-CHALLAN');
+ await workflow.getByRole('button',{name:'Save activity',exact:true}).click();
+ await workflow.getByRole('button',{name:'Customer approval',exact:true}).click();
+ await workflow.getByRole('button',{name:'Record acceptance',exact:true}).click();
+ await workflow.getByRole('button',{name:'Save activity',exact:true}).click();
+ await expect(workflow.getByRole('button',{name:'Save final approval',exact:true})).toBeDisabled();
+ await workflow.getByLabel('Written customer approval',{exact:true}).setInputFiles({name:'customer-approval.pdf',
+  mimeType:'application/pdf',buffer:Buffer.from('%PDF-1.4\n%%EOF')});
+ await workflow.getByRole('button',{name:'Upload evidence',exact:true}).click();
+ await workflow.getByRole('button',{name:'Save final approval',exact:true}).click();
+ await workflow.getByRole('button',{name:'Save activity',exact:true}).click();
+ await expect(workflow.getByLabel('Sample round').locator('option:checked')).toContainText('Approved');
  expect(errors).toEqual([]);
- console.log('Purchasing browser passed: sign-in, policy, supplier, quotation, selected PO, PI upload/download link, independent approval, advance payment and mobile layout.');
+ console.log('Purchasing browser passed: sign-in, policy, supplier, quotation, selected PO, PI upload/download link, independent approval, advance payment, mobile layout, and customer sampling from request to QC photo and written approval.');
 }catch(error){
  if(page){
   console.error((await page.locator('body').innerText()).slice(-2200));

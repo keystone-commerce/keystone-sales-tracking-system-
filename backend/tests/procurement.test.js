@@ -206,3 +206,105 @@ test('order holds block new requests and payments, and bank references cannot be
  await post(finance,'/procurement/payments',payment(raised.id,1100001)).expect(409);
  await post(finance,'/procurement/payments',payment(raised.id,1100000)).expect(201);
 });
+
+
+test('one SKU supports several shared suppliers and quotations with consistent sourcing identities',async()=>{
+ const {order,quote}=await setup(100,false);
+ const firstSupplier=(await db.query('SELECT supplier_id FROM supplier_quotes WHERE id=$1',[quote.id])).rows[0].supplier_id;
+ const secondSupplier=await post(member,'/procurement/suppliers',{
+  name:'Alternative supplier '+randomUUID(),phone:'9999999999',email:'supplier@example.test'
+ }).expect(201);
+ const reference=(supplierId,code)=>post(member,'/sourcing',{
+  order_id:order.id,order_item_id:order.item_ids[0],supplier_id:supplierId,
+  external_ref:code,status:'Ready',supplier:'Client name override',vendor_email:'override@example.test'
+ });
+ const first=await reference(firstSupplier,'SRC-A').expect(201);
+ const second=await reference(secondSupplier.body.id,'SRC-B').expect(201);
+ await reference(firstSupplier,'DUPLICATE-A').expect(409);
+ const quoteInput={order_id:order.id,order_item_id:order.item_ids[0],qty:100,rate_paise:70000,gst_bps:0,quote_date:'2027-01-01'};
+ await post(member,'/procurement/quotes',{...quoteInput,supplier_id:firstSupplier,sourcing_link_id:first.body.id,reference:'SHARED-A1-'+randomUUID()}).expect(201);
+ await post(member,'/procurement/quotes',{...quoteInput,supplier_id:firstSupplier,sourcing_link_id:first.body.id,reference:'SHARED-A2-'+randomUUID(),rate_paise:68000}).expect(201);
+ await post(member,'/procurement/quotes',{...quoteInput,supplier_id:secondSupplier.body.id,sourcing_link_id:second.body.id,reference:'SHARED-B1-'+randomUUID(),rate_paise:75000}).expect(201);
+ await post(member,'/procurement/quotes',{...quoteInput,supplier_id:firstSupplier,sourcing_link_id:second.body.id,reference:'INVALID-LINK-'+randomUUID()}).expect(404);
+ const workspace=(await member.get('/api/workspace')).body;
+ const records=workspace.sourcing.filter(row=>row.order_id===order.id);
+ assert.equal(records.length,2);
+ assert.ok(!records.some(row=>row.supplier==='Client name override'));
+ assert.equal(records.find(row=>row.supplier_id===secondSupplier.body.id).vendor_email,'supplier@example.test');
+ assert.equal(workspace.orders.find(row=>row.id===order.id).execution_status,'Ready to dispatch');
+ const data=(await member.get('/api/procurement')).body;
+ assert.equal(data.quotes.filter(row=>row.sourcing_link_id===first.body.id).length,2);
+ await member.patch('/api/sourcing/'+first.body.id).set('X-Requested-With','sales-ops')
+  .send({version:1,status:'Ready',supplier_id:secondSupplier.body.id}).expect(409);
+ const options=await member.get('/api/procurement/suppliers').expect(200);
+ assert.ok(options.body.some(row=>row.id===secondSupplier.body.id));
+ assert.ok(options.body.every(row=>!Object.hasOwn(row,'account_number')));
+ await viewer.get('/api/procurement/suppliers').expect(403);
+ const sourcingOptions=await viewer.get('/api/sourcing/suppliers').expect(200);
+ assert.ok(sourcingOptions.body.every(row=>!Object.hasOwn(row,'account_number')));
+});
+
+test('customer sampling compares suppliers, pays sample costs, records QC evidence and gates bulk confirmation',async()=>{
+ await policy();
+ await request(app).get('/api/samples').expect(401);
+ const order=await createRecord(db,'orders',{customer_id:customer.id,request_channel:'Call',sales_path:'agreed',stage:'Draft',
+  owner:'Sales',target_date:'2027-02-10',ship_to:'ABC Bengaluru',items:[{sku:'SAMPLE-HELMET',description:'Helmet',qty:100,rate_paise:100000,gst_bps:0}]},actors.admin);
+ const sampleInput={order_id:order.id,order_item_id:order.item_ids[0],qty:2,needed_on:'2027-01-10',sample_type:'Pre-production',
+  specifications:'Blue helmet, size M, ABC logo. Bulk quantity 100.'};
+ const path='/samples?order_id='+order.id;
+ const round=(await post(member,'/samples',sampleInput).expect(201)).body;
+ await post(member,'/samples',sampleInput).expect(409);
+ const acceptOrder=version=>admin.patch('/api/orders/'+order.id).set('X-Requested-With','sales-ops')
+  .send({version,stage:'PO received',po_ref:'ABC-SAMPLE-BULK',po_channel:'Email',po_received_date:'2027-01-08'});
+ const blocked=await acceptOrder(2).expect(409);
+ assert.match(blocked.body.error,/written customer sample approval/);
+ const supplierIds=[];
+ for(const name of ['Sample vendor A','Sample vendor B']){
+  supplierIds.push((await post(member,'/procurement/suppliers',{name}).expect(201)).body.id);
+ }
+ const quoteInput={order_id:order.id,order_item_id:order.item_ids[0],sample_round_id:round.id,qty:2,gst_bps:0,quote_date:'2027-01-01'};
+ const quote=(await post(member,'/procurement/quotes',{...quoteInput,supplier_id:supplierIds[0],reference:'SAMPLE-A',rate_paise:25000,courier_paise:10000}).expect(201)).body;
+ await post(member,'/procurement/quotes',{...quoteInput,supplier_id:supplierIds[1],reference:'SAMPLE-B',rate_paise:0}).expect(201);
+ const issuePO=(quoteId,qty,reference)=>post(member,'/procurement/purchase-orders',{quote_id:quoteId,qty,reference,
+  order_date:'2027-01-01',expected_date:'2027-01-03',selection_reason:'Meets the customer specification'});
+ await issuePO(quote.id,3,'TOO-MANY-SAMPLES').expect(409);
+ const po=(await issuePO(quote.id,2,'SAMPLE-PO').expect(201)).body;
+ await issuePO(quote.id,1,'DUPLICATE-SAMPLE-PO').expect(409);
+ await raise(po,60001).then(res=>assert.equal(res.status,409));
+ const advance=(await raise(po,60000)).body;
+ await post(finance,'/procurement/payments',payment(advance.id,60000)).expect(409);
+ await decision(first,await getRequest(advance.id),'Approve').expect(200);
+ await post(finance,'/procurement/payments',payment(advance.id,60000)).expect(201);
+ const event=(action,version,day,body={})=>post(member,'/samples/'+round.id+'/events',{action,version,event_date:'2027-01-'+day,...body});
+ const document=(category,bytes,filename)=>member.post('/api/samples/'+round.id+'/documents')
+  .set('X-Requested-With','sales-ops').set('Content-Type','application/octet-stream')
+  .set('X-Document-Category',category).set('X-File-Name',filename).send(bytes);
+ await event('Pass QC',2,'03',{notes:'Too early'}).expect(409);
+ await event('Receive',2,'03',{qty:2}).expect(200);
+ await document('qc',pdf,'not-a-photo.pdf').expect(400);
+ const png=Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+a2ZkAAAAASUVORK5CYII=','base64');
+ const photo=(await document('qc',png,'qc-helmet.png').expect(201)).body;
+ const photoPath='/api/samples/'+round.id+'/documents/'+photo.id;
+ await request(app).get(photoPath).expect(401);
+ const fetched=await member.get(photoPath).expect('Content-Type',/image\/png/).expect('Content-Disposition',/^inline/).expect(200);
+ assert.deepEqual(fetched.body,png);
+ await event('Pass QC',3,'03',{notes:'Shell and logo match the confirmed specifications'}).expect(200);
+ await event('Issue',4,'04',{qty:2,reference:'CHALLAN-001 / TRACK-001'}).expect(200);
+ await event('Accept',5,'05',{notes:'ABC confirmed the logo and fit'}).expect(200);
+ await event('Approve',6,'06').expect(409);
+ await document('approval',pdf,'abc-written-approval.pdf').expect(201);
+ await event('Approve',6,'06').expect(200);
+ await event('Return',7,'07',{qty:3,notes:'Too many'}).expect(409);
+ await event('Return',7,'07',{qty:1,notes:'One sample returned to Keystone'}).expect(200);
+ const saved=(await member.get('/api'+path).expect(200)).body;
+ assert.equal(saved.rounds[0].status,'Approved');
+ assert.equal(saved.rounds[0].supplier_name,'Sample vendor A');
+ assert.equal(saved.events.length,8);
+ assert.equal(saved.documents.length,2);
+ await admin.post('/api/orders/'+order.id+'/documents').set('X-Requested-With','sales-ops').set('Content-Type','application/octet-stream')
+  .set('X-File-Name','abc-bulk-po.pdf').set('X-Document-Category','po').set('X-Communication-Channel','Email').send(pdf).expect(201);
+ await acceptOrder(2).expect(200);
+ await updateRecord(db,'orders',order.id,{version:3,stage:'Ready for sourcing'},actors.admin);
+ const bulk=(await post(member,'/procurement/quotes',{...quoteInput,sample_round_id:null,qty:100,supplier_id:supplierIds[0],reference:'BULK-A',rate_paise:70000}).expect(201)).body;
+ await issuePO(bulk.id,100,'BULK-SAMPLE-FLOW-PO').expect(201);
+});
